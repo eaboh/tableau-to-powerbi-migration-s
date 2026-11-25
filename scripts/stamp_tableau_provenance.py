@@ -704,20 +704,25 @@ def classify_inventory(facts: dict[str, int | None]) -> InventoryCompleteness:
     if page.page_number is not None and page.page_number > 1:
         complete = (
             page.total_available == page.returned_count
-            and page.page_size == INVENTORY_PAGE_SIZE
-            and page.page_number == (page.returned_count + INVENTORY_PAGE_SIZE - 1) // INVENTORY_PAGE_SIZE
+            and page.page_size is not None
+            and 0 < page.page_size <= INVENTORY_PAGE_SIZE
+            and page.page_number == (page.returned_count + page.page_size - 1) // page.page_size
         )
         return page._replace(status="complete" if complete else "cannot_establish")
+    size_valid = page.page_size is None or 0 < page.page_size <= facts["requested_page_size"]
     if (
-        page.returned_count > facts["requested_page_size"]
+        page.returned_count > (page.page_size or facts["requested_page_size"])
         or page.page_number not in (None, 1)
-        or page.page_size not in (None, facts["requested_page_size"])
+        or not size_valid
         or (page.total_available is not None and page.total_available < page.returned_count)
     ):
         return page
     if page.total_available is not None:
         return page._replace(status="complete")
-    return page._replace(status="complete") if page.returned_count < facts["requested_page_size"] else page
+    complete = (
+        page.page_size in (None, facts["requested_page_size"]) and page.returned_count < facts["requested_page_size"]
+    )
+    return page._replace(status="complete") if complete else page
 
 
 def _inventory_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -884,26 +889,28 @@ class TableauLookup:  # pylint: disable=too-many-instance-attributes
 
     def _workbook_inventory(self) -> tuple[list[dict[str, Any]], InventoryCompleteness]:
         rows, page = self._workbook_page(1)
+        seen = self._workbook_luids(rows)
         if not (
             page.invalid_fields == 0
             and page.page_number == 1
-            and page.page_size == INVENTORY_PAGE_SIZE
+            and page.page_size is not None
+            and 0 < page.page_size <= INVENTORY_PAGE_SIZE
             and page.total_available is not None
-            and page.total_available > INVENTORY_PAGE_SIZE
-            and len(rows) == INVENTORY_PAGE_SIZE
+            and page.total_available > len(rows)
+            and len(rows) == page.page_size
         ):
             return rows, page
         total = page.total_available
-        seen = self._workbook_luids(rows)
-        last_page = (total + INVENTORY_PAGE_SIZE - 1) // INVENTORY_PAGE_SIZE
+        size = page.page_size
+        last_page = (total + size - 1) // size
         for number in range(2, last_page + 1):
             more, observed = self._workbook_page(number)
             if (
                 observed.invalid_fields
                 or observed.page_number != number
-                or observed.page_size != INVENTORY_PAGE_SIZE
+                or observed.page_size != size
                 or observed.total_available != total
-                or len(more) != min(INVENTORY_PAGE_SIZE, total - len(rows))
+                or len(more) != min(size, total - len(rows))
             ):
                 raise ValueError("inconsistent workbook inventory page")
             luids = self._workbook_luids(more)

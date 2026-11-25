@@ -724,11 +724,6 @@ CERTIFIED: dict[tuple[str, str], dict[str, str]] = {
     ("scripts/tableau_lineage.py", "fetch_lineage"): {
         "session.base": "OUTBOUND: the configured Tableau server URL is used only to build the request",
         "session.token": "OUTBOUND: the session token is sent only in the request header",
-        "result['errors']": "REDACTED-UPSTREAM: redacted_note receives the complete response value before formatting",
-        "'Metadata API returned errors: ' + redacted_note(json.dumps(result['errors']), lambda text: "
-        "redact(text, session.pat_name, session.pat_secret, session.token), limit=400)": (
-            "REDACTED-UPSTREAM: the only raised response text is the redacted_note result"
-        ),
     },
     ("scripts/tableau_lineage.py", "download_datasource"): {
         "session.base": "OUTBOUND: configured Tableau server URL used only to build the request",
@@ -845,7 +840,7 @@ CERTIFIED: dict[tuple[str, str], dict[str, str]] = {
     # ⚠️ `view_types` itself has NO certified expressions and that is correct, not an omission: after
     # the round-2 split it only routes between three helpers, so no response-derived value reaches an
     # exit inside it. `test_the_certification_list_has_no_stale_entries` would reject a leftover entry ...
-    ("scripts/tableau_view_types.py", "fetch_payload"): {
+    ("scripts/tableau_view_types.py", "_fetch_page"): {
         # ⚠️ `type(payload).__name__` is no longer certified HERE, and its absence is the round-4
         # fix rather than an omission: the top-level shape check MOVED into `parse_payload`, the
         # shared seam every caller passes through. Keeping a copy here as well would have been a ...

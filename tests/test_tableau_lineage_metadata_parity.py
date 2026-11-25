@@ -77,8 +77,11 @@ ENV = {
 }
 
 SIGNIN_BODY = json.dumps({"credentials": {"token": "session-token-abc", "site": {"id": "site-1"}}}).encode()
-STRUCTURE_BODY = json.dumps({"data": {"workbooks": []}}).encode()
-LINEAGE_BODY = json.dumps({"data": {"publishedDatasources": []}}).encode()
+EMPTY_CONNECTION = {"nodes": [], "totalCount": 0, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+STRUCTURE_BODY = json.dumps(
+    {"data": {"workbooks": EMPTY_CONNECTION, "publishedDatasources": EMPTY_CONNECTION}}
+).encode()
+LINEAGE_BODY = json.dumps({"data": {"publishedDatasources": EMPTY_CONNECTION}}).encode()
 GRAPHQL_ERRORS_BODY = json.dumps(
     {"errors": [{"message": "field 'downstreamWorkbooks' requires Data Management"}]}
 ).encode()
@@ -227,7 +230,7 @@ def test_a_synthetic_success_response_is_accepted_by_both_clients(monkeypatch: p
 
     payload, error = site.graphql(assess_estate.STRUCTURE_QUERY)
     assert error is None
-    assert payload == {"data": {"workbooks": []}}
+    assert payload == {"data": {"workbooks": EMPTY_CONNECTION, "publishedDatasources": EMPTY_CONNECTION}}
 
     transport.metadata_body = LINEAGE_BODY
     assert tableau_lineage.fetch_lineage(session) == []

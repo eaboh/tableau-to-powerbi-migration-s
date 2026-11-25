@@ -608,6 +608,11 @@ class TableauSite:  # pylint: disable=too-many-instance-attributes
             query = json.loads(body or b"{}").get("query") or ""
         except json.JSONDecodeError:
             return self._json(200, {"errors": [{"message": "could not parse the request body"}]})
+        connection = re.search(
+            r"(workbooks|publishedDatasources): \1Connection\(first: (\d+), after: (null|\"[^\"]*\")", query
+        )
+        if connection:
+            return self._metadata_connection(query, connection)
         if "downstreamWorkbooks" in query:
             return self._json(200, {"data": {"publishedDatasources": self._lineage()}})
         if "workbooks" in query:
@@ -632,6 +637,54 @@ class TableauSite:  # pylint: disable=too-many-instance-attributes
         # A query we do not serve is an ERROR, not an empty answer: silently returning `{}` is how a
         # caller concludes "this estate has no dependencies" and sequences the migration wrong.
         return self._json(200, {"errors": [{"message": "unsupported query for the mock Metadata API"}]})
+
+    def _metadata_connection(self, query: str, connection: re.Match) -> tuple[int, dict, bytes]:
+        collection, size, cursor = connection.groups()
+        if collection == "workbooks":
+            rows = [{**self._structure(workbook), "id": f"gid-{workbook.luid}"} for workbook in self.workbooks]
+        else:
+            rows = self._lineage()
+        if cursor == "null":
+            start = 0
+        else:
+            decoded = json.loads(cursor)
+            if re.fullmatch(r"mock-\d+", decoded) is None:
+                return self._json(200, {"errors": [{"message": "invalid mock cursor"}]})
+            start = int(decoded.removeprefix("mock-"))
+
+        def nested(node, prefix):
+            normalized = {**node, "id": node.get("id") or f"gid-{prefix}"}
+            for key in (
+                "sheets",
+                "dashboards",
+                "embeddedDatasources",
+                "fields",
+                "upstreamTables",
+                "downstreamWorkbooks",
+            ):
+                if key in node:
+                    children = [nested(child, f"{prefix}-{key}-{index}") for index, child in enumerate(node[key])]
+                    normalized[key] = {
+                        "nodes": children[:1000],
+                        "totalCount": len(children),
+                        "pageInfo": {"hasNextPage": len(children) > 1000, "endCursor": None},
+                    }
+            return normalized
+
+        selected = [nested(row, row["id"]) for row in rows[start : start + int(size)]]
+        end = start + len(selected)
+        return self._json(
+            200,
+            {
+                "data": {
+                    collection: {
+                        "nodes": selected,
+                        "totalCount": len(rows),
+                        "pageInfo": {"hasNextPage": end < len(rows), "endCursor": f"mock-{end}"},
+                    }
+                }
+            },
+        )
 
     def _lineage(self) -> list[dict[str, Any]]:
         by_name = {w.name: w for w in self.workbooks}

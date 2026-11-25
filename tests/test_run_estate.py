@@ -5612,7 +5612,12 @@ def _assert_protocol_refused(run: tuple[int, dict, Path], total: int) -> None:
         (1, ..., "success", None),
         (999, ..., "success", None),
         (1000, {"pageNumber": "1", "pageSize": "1000", "totalAvailable": "1000"}, "success", None),
-        (1000, {"pageNumber": "1", "pageSize": "1000", "totalAvailable": "1001"}, "partial", "inventory-truncated"),
+        (
+            1000,
+            {"pageNumber": "1", "pageSize": "1000", "totalAvailable": "1001"},
+            "partial",
+            ("inventory-failed", "live-lookup-failed"),
+        ),
         (1, {"pageNumber": "1", "pageSize": "1000", "totalAvailable": "2"}, "partial", "inventory-truncated"),
         (1000, ..., "partial", "inventory-cannot-establish"),
         (1, {"totalAvailable": True}, "partial", "inventory-cannot-establish"),
@@ -5630,7 +5635,12 @@ def _assert_protocol_refused(run: tuple[int, dict, Path], total: int) -> None:
     ],
 )
 def test_real_inventory_result_publishes_once_and_binds_later_phases(
-    tmp_path: Path, monkeypatch, row_count: int | None, pagination: object, status: str, error_code: str | None
+    tmp_path: Path,
+    monkeypatch,
+    row_count: int | None,
+    pagination: object,
+    status: str,
+    error_code: str | tuple[str, ...] | None,
 ) -> None:
     """Real transport/parser/build output crosses the spawned protocol and the unchanged atomic writer."""
     import test_stamp_tableau_provenance as fixtures  # pylint: disable=import-outside-toplevel
@@ -5642,7 +5652,15 @@ def test_real_inventory_result_publishes_once_and_binds_later_phases(
     document = fixtures._inventory_page(row_count or 0, pagination)
     if row_count:
         document["workbooks"]["workbook"][0]["name"] = "unit"
-    site = fixtures._install(monkeypatch, fixtures.RecordingSite(fixtures.LIVE_ENV, inventory_document=document))
+    failed_next_page = isinstance(error_code, tuple)
+    site = fixtures._install(
+        monkeypatch,
+        fixtures.RecordingSite(
+            fixtures.LIVE_ENV,
+            inventory_document=document,
+            inventory_pages=[(200, document), (503, {})] if failed_next_page else None,
+        ),
+    )
     reporter = fixtures.RecordingReporter()
     result = fixtures.prov.build(source, fixtures.LIVE_ENV if row_count is not None else {}, reporter)
     reporter.terminal(result)
@@ -5652,11 +5670,12 @@ def test_real_inventory_result_publishes_once_and_binds_later_phases(
 
     assert artifact == result, "PAGINATION_PROTOCOL_RESULT: the typed result was replaced or lost"
     assert artifact["phase"]["status"] == status
-    assert [error["code"] for error in artifact["phase"]["errors"]] == ([error_code] if error_code else [])
+    expected_errors = list(error_code) if isinstance(error_code, tuple) else ([error_code] if error_code else [])
+    assert [error["code"] for error in artifact["phase"]["errors"]] == expected_errors
     assert artifact["input_count"] == len(artifact["inputs"]) == 1
     assert artifact["inputs"][0]["input"]["sha256"] == hashlib.sha256(original).hexdigest()
-    assert site.count("inventory") == int(row_count is not None)
-    assert site.count("content") == int(bool(row_count))
+    assert site.count("inventory") == int(row_count is not None) + int(failed_next_page)
+    assert site.count("content") == int(bool(row_count) and not failed_next_page)
     assert not list(out.glob("source-provenance.json.*.tmp"))
     phases = set(_phase_names(out))
     if error_code:

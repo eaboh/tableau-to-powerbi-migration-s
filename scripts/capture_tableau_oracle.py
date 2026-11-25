@@ -885,6 +885,9 @@ def _list_inventory(session: TableauSession, collection: str, item: str) -> list
             not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows
         ):
             raise ValueError("invalid inventory pagination rows")
+        ids = {row["id"] for row in rows}
+        if len(ids) != len(rows) or seen.intersection(ids):
+            raise ValueError("repeated identities in inventory pagination")
         if "pagination" not in payload and page == 1 and len(rows) < 1000:
             return rows
         pagination = payload.get("pagination")
@@ -898,14 +901,11 @@ def _list_inventory(session: TableauSession, collection: str, item: str) -> list
             expected = (counts["totalAvailable"], counts["pageSize"])
         if (
             counts["pageNumber"] != page
-            or counts["pageSize"] <= 0
+            or not 0 < counts["pageSize"] <= 1000
             or (counts["totalAvailable"], counts["pageSize"]) != expected
             or len(rows) != min(counts["pageSize"], max(0, counts["totalAvailable"] - len(out)))
         ):
             raise ValueError("inconsistent inventory pagination")
-        ids = {row["id"] for row in rows}
-        if len(ids) != len(rows) or seen.intersection(ids):
-            raise ValueError("repeated identities in inventory pagination")
         seen.update(ids)
         out.extend(rows)
         if len(out) == counts["totalAvailable"]:

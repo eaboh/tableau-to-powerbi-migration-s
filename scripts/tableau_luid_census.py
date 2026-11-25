@@ -22,10 +22,10 @@ against any site and the census answers, in counts, whether that site would exer
 
 Safety
 ------
-⚠️ **Read-only, and one query.** Sign-in, then exactly one GraphQL request -- made by
-``tableau_view_types.fetch_payload``, the SAME transport hop the shipped parser uses, over the ONE
-hardened ``tableau_http`` round trip -- with no loop and no concurrency. The response body is never
-written to disk and never printed.
+⚠️ **Read-only, and paginated.** Sign-in, then bounded workbook connection requests made by
+``tableau_view_types.fetch_payload``, the SAME acquisition path the shipped parser uses, over
+hardened ``tableau_http`` round trips. Requests are sequential; incomplete pages refuse the census.
+Response bodies are never written to disk or printed.
 
 ⚠️ **It shares the shipped parser's seams rather than re-implementing them, and that is a correctness
 property, not tidiness.** This script's entire claim is "here is what the shipped parser sees on this
@@ -225,10 +225,10 @@ def verdict(totals: dict[str, int], refused: bool) -> str:
 
 
 def _session(env_path: Path) -> oracle.TableauSession:
-    """Build the session from `.env`, with a ONE-attempt retry policy.
+    """Build the session from `.env`, with one attempt per page.
 
     ⚠️ `max_attempts=1` is deliberate. This script exists to answer one read-only question, and a
-    retry loop against a credentialed site-wide query is exactly the shape the repository's
+    retry loop against a credentialed query is exactly the shape the repository's
     "never block silently on an external system" rule exists to prevent. One try, then a verdict.
     """
     env = tableau_env.resolve_env(env_path)
@@ -246,7 +246,7 @@ def _session(env_path: Path) -> oracle.TableauSession:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Sign in, ask ONCE, report counts, and name a verdict.
+    """Sign in, acquire complete pages, report counts, and name a verdict.
 
     Exit 0 means a census was produced -- including the NOT-PRESENT verdict, which is a real answer
     about the site. Exit 2 means CANNOT-TELL: authentication failed, the API did not answer 200, the
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     session = _session(Path(args.env))
-    print("=== blank-luid census (read-only, one query) ===")
+    print("=== blank-luid census (read-only, paginated) ===")
     # ⚠️ ONE path for every outcome. Sign-in, the transport hop, the protocol check and the mapping
     # all land on the same `(payload, unavailable)`, so there is no early return that can skip the
     # assessability flag, the JSON, or the exit code. Three such early returns used to exist, and

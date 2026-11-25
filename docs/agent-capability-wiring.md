@@ -146,6 +146,7 @@ appear only where the tier is not obvious. `scripts/README.md` remains the advan
 | `scripts/tableau_oracle_manifest.py` | `internal` | |
 | `scripts/tableau_payload_facts.py` | `internal` | |
 | `scripts/tableau_view_types.py` | `internal` | |
+| `scripts/tableau_metadata.py` | `internal` | Bounded shared Metadata connection pagination. |
 | `scripts/tmdl_checks.py` | `internal` | Library; agents run `check_datamodel.py`, which re-exports it. |
 | `scripts/tmdl_oracle.py` | `internal` | Library; agents run `check_datamodel.py`, which carries this gate. |
 | `scripts/unit_ids.py` | `internal` | Library behind `t2p units`. |

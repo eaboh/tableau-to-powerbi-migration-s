@@ -1945,7 +1945,38 @@ def _wb(dashboards=(), sheets=()):
 
 
 def _graphql(payload):
-    return FakeSession([(200, json.dumps(payload), {})])
+    return FakeSession([(200, json.dumps(_metadata_reply(payload)), {})])
+
+
+def _metadata_reply(payload):
+    """Put measurement fixtures into the Metadata connection wire shape."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return payload
+    rows = payload["data"].get("workbooks")
+    if not isinstance(rows, list):
+        return payload
+
+    def connection(nodes):
+        if not isinstance(nodes, list):
+            return nodes
+        return {
+            "nodes": [
+                {**node, "id": f"node-{index}"} if isinstance(node, dict) else node for index, node in enumerate(nodes)
+            ],
+            "totalCount": len(nodes),
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
+
+    workbooks = [
+        {
+            **row,
+            **{key: connection(row[key]) for key in ("dashboards", "sheets") if key in row},
+        }
+        if isinstance(row, dict)
+        else row
+        for row in rows
+    ]
+    return {**payload, "data": {"workbooks": connection(workbooks)}}
 
 
 def test_view_types_joins_dashboards_and_worksheets_by_luid():
@@ -2043,12 +2074,12 @@ def test_view_types_asks_the_metadata_api_through_the_hardened_path():
                 )
             ],
             "a non-dict node beside a valid one",
-            "not an object; response refused",
+            "invalid metadata connection nodes",
         ),
         (
             [(200, json.dumps({"data": {"workbooks": [_wb(dashboards=[DASH_LUID]), ["not", "a", "dict"]]}}), {})],
             "a non-dict workbook beside a valid one",
-            "a workbook node was list, not an object",
+            "invalid metadata connection nodes",
         ),
         (
             [
@@ -2059,16 +2090,16 @@ def test_view_types_asks_the_metadata_api_through_the_hardened_path():
                 )
             ],
             "a non-list `dashboards` beside a valid `sheets`",
-            "`dashboards` was str, not a list",
+            "metadata connection is unavailable",
         ),
         # --- shapes that used to RAISE rather than refuse. `pytest.raises` is deliberately not used:
         # an escaping exception fails the call outright, which is the point.
-        ([(200, "null", {})], "a top-level null", "was NoneType, not an object"),
-        ([(200, json.dumps({"data": None}), {})], "`data` is null", "`data` was NoneType, not an object"),
+        ([(200, "null", {})], "a top-level null", "invalid metadata response envelope"),
+        ([(200, json.dumps({"data": None}), {})], "`data` is null", "metadata connection is unavailable"),
         (
             [(200, json.dumps({"data": {"workbooks": {"dashboards": []}}}), {})],
             "`workbooks` is a dict",
-            "`workbooks` was dict, not a list",
+            "invalid metadata connection nodes",
         ),
         (
             [(200, json.dumps({"errors": {"message": "boom"}, "data": {"workbooks": []}}), {})],
@@ -2123,17 +2154,17 @@ def test_view_types_asks_the_metadata_api_through_the_hardened_path():
                 )
             ],
             "`sheets` is null beside a valid dashboard",
-            "`sheets` was NoneType, not a list",
+            "metadata connection is unavailable",
         ),
         (
             [(200, json.dumps({"data": {"workbooks": [{"dashboards": [{"luid": DASH_LUID}]}]}}), {})],
             "`sheets` is absent entirely, beside a valid dashboard",
-            "had no `sheets` field",
+            "metadata connection is unavailable",
         ),
         (
             [(200, json.dumps({"data": {"workbooks": [{"sheets": [{"luid": SHEET_LUID}]}]}}), {})],
             "`dashboards` is absent entirely, beside a valid sheet",
-            "had no `dashboards` field",
+            "metadata connection is unavailable",
         ),
         (
             [
@@ -2178,7 +2209,15 @@ def test_view_types_asks_the_metadata_api_through_the_hardened_path():
 )
 def test_view_types_fails_closed_and_never_guesses(responses, why, guard):
     """⚠️ The load-bearing property. EVERY failure yields an empty map plus a stated reason."""
-    mapping, unavailable = view_types_mod.view_types(FakeSession(responses))
+    encoded = []
+    for status, body, headers in responses:
+        try:
+            payload = json.loads(body)
+        except (ValueError, RecursionError):
+            encoded.append((status, body, headers))
+        else:
+            encoded.append((status, json.dumps(_metadata_reply(payload)), headers))
+    mapping, unavailable = view_types_mod.view_types(FakeSession(encoded))
     assert mapping == {}, f"{why} must not produce a mapping"
     assert unavailable, f"{why} must state why the type is unknown"
     assert guard in unavailable, (

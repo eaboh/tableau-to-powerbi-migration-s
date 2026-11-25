@@ -44,6 +44,8 @@ import json
 import re
 from typing import Any
 
+from tableau_metadata import MetadataIncomplete, collect_connection
+
 # The same closed allowlist `capture_tableau_oracle.artifact_stem` uses for filenames, for the same
 # reason: a value that has been PROVED to be a UUID cannot carry a credential, so it needs no
 # redaction downstream. Validating here means the mapping's keys are shape-verified rather than
@@ -68,8 +70,14 @@ def is_luid(value: str) -> bool:
 # `luid` is not queried anywhere else in this repo, so an older server that does not expose it is a
 # capability question rather than a bug. Only the SHAPE of the resulting GraphQL error is reported --
 # never its message, which is server-controlled (see `view_types`).
-VIEW_TYPE_QUERY = """
-{ workbooks { dashboards { luid } sheets { luid } } }
+VIEW_TYPE_FIELDS = """
+id
+dashboards: dashboardsConnection(first: 1000) {
+  nodes { id luid } totalCount pageInfo { hasNextPage endCursor }
+}
+sheets: sheetsConnection(first: 1000) {
+  nodes { id luid } totalCount pageInfo { hasNextPage endCursor }
+}
 """
 
 # An upper bound on the body we will decode and parse, not a statement about Tableau. The query asks
@@ -139,8 +147,8 @@ def parse_payload(payload: Any) -> tuple[dict[str, str], str | None]:
     return _mapping_from(payload)
 
 
-def fetch_payload(session: Any) -> tuple[Any, str | None]:
-    """One round trip, decoded. Returns ``(payload, refusal_reason)``.
+def _fetch_page(session: Any, query: str) -> tuple[Any, str | None]:
+    """One bounded round trip, decoded. Returns ``(payload, refusal_reason)``.
 
     ⚠️ **Public because a second caller needs exactly this, and re-implementing it is the defect.**
     ``tableau_luid_census`` holds the decoded payload for its counts, so it cannot simply call
@@ -180,7 +188,7 @@ def fetch_payload(session: Any) -> tuple[Any, str | None]:
     """
     try:
         status, body, _ = session._request(  # pylint: disable=protected-access
-            "POST", "/graphql", body={"query": VIEW_TYPE_QUERY}, api="metadata"
+            "POST", "/graphql", body={"query": query}, api="metadata"
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return {}, f"metadata api call failed: {type(exc).__name__}"
@@ -196,6 +204,26 @@ def fetch_payload(session: Any) -> tuple[Any, str | None]:
     # the shared seam every caller goes through -- keeping a copy here as well would be a guard no
     # mutation could kill, because removing it changes nothing.
     return payload, None
+
+
+def fetch_payload(session: Any) -> tuple[Any, str | None]:
+    """Acquire every workbook page through the shared transport and parser seams."""
+
+    def fetch(query: str) -> dict:
+        payload, refusal = _fetch_page(session, query)
+        if refusal:
+            raise MetadataIncomplete(refusal)
+        if isinstance(payload, dict):
+            refusal = _errors_refusal(payload)
+            if refusal:
+                raise MetadataIncomplete(refusal)
+        return payload
+
+    try:
+        workbooks = collect_connection(fetch, "workbooks", VIEW_TYPE_FIELDS, nested={"dashboards": {}, "sheets": {}})
+    except MetadataIncomplete as exc:
+        return {}, str(exc)
+    return {"data": {"workbooks": workbooks}}, None
 
 
 def _errors_refusal(payload: dict[str, Any]) -> str | None:

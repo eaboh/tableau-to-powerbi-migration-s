@@ -186,12 +186,36 @@ class _Stub:
         return 200, self.body.encode("utf-8"), {}
 
 
+def _metadata_payload(payload):
+    """Encode legacy measurement fixtures in the queried connection shape."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return payload
+    workbooks = payload["data"].get("workbooks")
+    if not isinstance(workbooks, list):
+        return payload
+
+    def connection(nodes):
+        if not isinstance(nodes, list):
+            return nodes
+        return {
+            "nodes": [{**node, "id": f"node-{index}"} for index, node in enumerate(nodes)],
+            "totalCount": len(nodes),
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
+
+    rows = [
+        {**workbook, "dashboards": connection(workbook.get("dashboards")), "sheets": connection(workbook.get("sheets"))}
+        for workbook in workbooks
+    ]
+    return {**payload, "data": {"workbooks": connection(rows)}}
+
+
 @pytest.fixture(name="run_census")
 def _run_census(monkeypatch):
     """Drive `main()` against a scripted body. Returns (exit_code, stdout)."""
 
     def run(payload, json_out=None):
-        monkeypatch.setattr(census_mod, "_session", lambda _path: _Stub(json.dumps(payload)))
+        monkeypatch.setattr(census_mod, "_session", lambda _path: _Stub(json.dumps(_metadata_payload(payload))))
         argv = ["--env", "unused"] + (["--json", str(json_out)] if json_out else [])
         return census_mod.main(argv)
 
@@ -310,10 +334,10 @@ def test_the_recorded_live_measurement_replays_to_the_same_verdict(run_census, c
 @pytest.mark.parametrize(
     "payload, why, guard",
     [
-        (None, "a top-level null", "response was NoneType, not an object"),
-        ({"data": []}, "`data` is a list", "`data` was list, not an object"),
-        ({"data": {"workbooks": None}}, "`workbooks` is null", "`workbooks` was NoneType, not a list"),
-        ({"data": {"workbooks": {"dashboards": []}}}, "`workbooks` is a dict", "`workbooks` was dict, not a list"),
+        (None, "a top-level null", "invalid metadata response envelope"),
+        ({"data": []}, "`data` is a list", "metadata connection is unavailable"),
+        ({"data": {"workbooks": None}}, "`workbooks` is null", "metadata connection is unavailable"),
+        ({"data": {"workbooks": {"dashboards": []}}}, "`workbooks` is a dict", "invalid metadata connection nodes"),
     ],
 )
 def test_a_malformed_envelope_cannot_bypass_the_guarantees(payload, why, guard, run_census, capsys, tmp_path):
@@ -387,7 +411,7 @@ def test_an_unreadable_envelope_always_makes_the_parser_refuse(payload):
 # points to agree on the same bytes cannot. Parity IS the correctness property here.
 
 DASH_LUID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
-HEALTHY_BODY = b'{"data": {"workbooks": [{"dashboards": [{"luid": "' + DASH_LUID.encode() + b'"}], "sheets": []}]}}'
+HEALTHY_BODY = json.dumps(_metadata_payload(_payload([{"dashboards": [{"luid": DASH_LUID}], "sheets": []}]))).encode()
 
 
 def _oversized_body():
@@ -557,9 +581,9 @@ def test_a_measurable_run_also_survives_a_cp1252_console(tmp_path):
             scripts=str(Path(census_mod.__file__).parent),
             support=str(Path(view_types_mod.__file__).parent),
             status=200,
-            body=b'{"data": {"workbooks": [{"dashboards": [{"luid": "'
-            + LUID.encode()
-            + b'"}], "sheets": [{"luid": ""}]}]}}',
+            body=json.dumps(
+                _metadata_payload(_payload([{"dashboards": [{"luid": LUID}], "sheets": [{"luid": ""}]}]))
+            ).encode(),
         ),
         encoding="utf-8",
     )

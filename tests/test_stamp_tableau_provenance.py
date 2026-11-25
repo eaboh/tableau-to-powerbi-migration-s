@@ -1218,6 +1218,26 @@ def test_later_inventory_page_failure_never_caches_partial_rows(fault: str) -> N
     assert site.inventory_completeness is None
 
 
+@pytest.mark.parametrize("page_size", [500, 1000])
+@pytest.mark.parametrize("fault", ["duplicate", "case-duplicate", "missing", "empty"])
+def test_complete_first_page_rejects_invalid_identities(page_size: int, fault: str) -> None:
+    """Reject invalid identities before a single-page inventory earns completeness."""
+    document = _inventory_page(3, {"pageNumber": 1, "pageSize": page_size, "totalAvailable": 3})
+    rows = document["workbooks"]["workbook"]
+    if fault == "missing":
+        del rows[1]["id"]
+    elif fault == "empty":
+        rows[1]["id"] = ""
+    else:
+        rows[1]["id"] = rows[0]["id"].upper() if fault == "case-duplicate" else rows[0]["id"]
+    site = RecordingSite(LIVE_ENV, inventory_document=document)
+
+    with pytest.raises(ValueError, match="workbook inventory.*identity"):
+        site.workbooks()
+    assert site.inventory_completeness is None
+    assert site.current_workbook(f"{_fixture_luid(0)}_Title") is None
+
+
 @pytest.mark.parametrize("page_index", [0, 1], ids=["first-page", "later-page"])
 @pytest.mark.parametrize("uppercase", [False, True], ids=["exact", "case-variant"])
 def test_paginated_inventory_rejects_duplicate_identities_within_a_page(page_index: int, uppercase: bool) -> None:

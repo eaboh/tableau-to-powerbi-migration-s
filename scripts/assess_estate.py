@@ -479,21 +479,41 @@ class Site:  # pylint: disable=too-many-instance-attributes  # one client: crede
         listing loudly instead of passing a truncated list off as complete.
         """
         out: list[dict] = []
+        seen: set[str] = set()
+        expected: tuple[int, int] | None = None
+        started = time.monotonic()
         page = 1
         while page <= 1000:
-            sep = "&" if "?" in path else "?"
-            payload, error = self._request_json("GET", f"{path}{sep}pageSize=1000&pageNumber={page}")
+            payload, error = self._request_json(
+                "GET", f"{path}{'&' if '?' in path else '?'}pageSize=1000&pageNumber={page}"
+            )
             if error:
                 return out, {**error, "page": page}
-            block = (payload or {}).get(collection) or {}
-            rows = block.get(item) or []
-            rows = [rows] if isinstance(rows, dict) else rows
+            try:
+                rows, counts = _rest_page(payload, collection, item)
+                if seen & {row["id"] for row in rows}:
+                    raise ValueError("repeated REST inventory identity")
+                total = counts["totalAvailable"]
+                if page == 1 and len(rows) < 1000 and total == len(rows) and set(counts) == {"totalAvailable"}:
+                    return rows, None
+                counts.setdefault("pageSize", 0)
+                if expected is None:
+                    expected = (total, counts["pageSize"])
+                if (
+                    counts.get("pageNumber") != page
+                    or not 0 < counts["pageSize"] <= 1000
+                    or (total, counts["pageSize"]) != expected
+                    or len(rows) != min(counts["pageSize"], max(0, total - len(out)))
+                ):
+                    raise ValueError("inconsistent REST pagination")
+            except ValueError as exc:
+                return out, {**_record(path, 200, str(exc), 1, started), "page": page}
+            seen.update(row["id"] for row in rows)
             out.extend(rows)
-            total = int(((payload or {}).get("pagination") or {}).get("totalAvailable", 0))
-            if not rows or len(out) >= total:
-                break
+            if len(out) == total:
+                return out, None
             page += 1
-        return out, None
+        return out, {**_record(path, 200, "REST pagination exceeded the page limit", 1, started), "page": page}
 
     def graphql(self, query: str) -> tuple[dict[str, Any], dict | None]:
         """One Metadata API call -> ``(payload, error)``. Used for STRUCTURE only (see module doc).
@@ -503,6 +523,33 @@ class Site:  # pylint: disable=too-many-instance-attributes  # one client: crede
         """
         payload, error = self._request_json("POST", "", {"query": query}, GRAPHQL_ROOT)
         return payload or {}, error
+
+
+def _rest_page(payload: dict | None, collection: str, item: str) -> tuple[list[dict], dict[str, int]]:
+    """Validate one REST inventory page without assigning completeness to its prefix."""
+    block = (payload or {}).get(collection)
+    if not isinstance(block, dict):
+        raise ValueError("REST collection is unavailable")
+    rows = block.get(item, [])
+    rows = [rows] if isinstance(rows, dict) else rows
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows
+    ):
+        raise ValueError("invalid REST inventory rows")
+    if len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("repeated REST inventory identity")
+    pagination = (payload or {}).get("pagination")
+    if not isinstance(pagination, dict):
+        raise ValueError("REST pagination metadata is unavailable")
+    counts = {}
+    for key in ("pageNumber", "pageSize", "totalAvailable"):
+        value = pagination.get(key)
+        if value is None and key != "totalAvailable":
+            continue
+        if isinstance(value, bool) or re.fullmatch(r"[0-9]{1,19}", str(value)) is None:
+            raise ValueError("invalid REST pagination counts")
+        counts[key] = int(value)
+    return rows, counts
 
 
 def _record(path: str, status: int, detail: str, attempts: int, started: float) -> dict[str, Any]:
@@ -519,20 +566,30 @@ def _record(path: str, status: int, detail: str, attempts: int, started: float) 
 
 # `role` and `dataType` live on the CONCRETE types, not the Field interface - `fields { role }`
 # fails with FieldUndefined. Inline fragments are required.
-STRUCTURE_QUERY = """
-{ workbooks {
-    name projectName
-    sheets { name }
-    dashboards { name }
-    embeddedDatasources {
-      name hasUserReference
-      fields { name __typename
+STRUCTURE_FIELDS = """
+    id name projectName
+    sheets: sheetsConnection(first: 1000) {
+      nodes { id name } totalCount pageInfo { hasNextPage endCursor } }
+    dashboards: dashboardsConnection(first: 1000) {
+      nodes { id name } totalCount pageInfo { hasNextPage endCursor } }
+    embeddedDatasources: embeddedDatasourcesConnection(first: 1000) {
+      nodes { id name hasUserReference
+      fields: fieldsConnection(first: 1000) { nodes { id name __typename
         ... on ColumnField     { role dataType }
-        ... on CalculatedField { role dataType formula } } } }
-  publishedDatasources {
-    name isCertified hasExtracts extractLastRefreshTime
-    upstreamTables { fullName } } }
+        ... on CalculatedField { role dataType formula } }
+        totalCount pageInfo { hasNextPage endCursor } } }
+      totalCount pageInfo { hasNextPage endCursor } }
 """
+DATASOURCE_STRUCTURE_FIELDS = """
+    id name isCertified hasExtracts extractLastRefreshTime
+    upstreamTables: upstreamTablesConnection(first: 1000) {
+      nodes { id fullName } totalCount pageInfo { hasNextPage endCursor } }
+"""
+STRUCTURE_QUERY = (
+    "{ workbooks: workbooksConnection(first: 1000) { nodes { "
+    + STRUCTURE_FIELDS
+    + " } totalCount pageInfo { hasNextPage endCursor } } }"
+)
 
 
 def score_workbook(node: dict[str, Any]) -> dict[str, Any]:
@@ -793,28 +850,42 @@ def _group_members(site: Site, groups: list[dict]) -> list[dict]:
 
 
 def _pass2_structure(site: Site) -> tuple[dict[str, Any], list[dict]]:
-    """One GraphQL call for the whole estate -> ``(data, errors)``.
+    """Complete paginated workbook/datasource structure -> ``(data, errors)``.
 
     A structure failure is PRIMARY: ``score_workbook`` answers 0 for a workbook it cannot see, and 0
     complexity is not "simple", it is "unknown" - it feeds the retire-candidate tier directly.
     """
-    LOG.info("pass 2: structure (one GraphQL call for the whole estate)")
+    from tableau_metadata import MetadataIncomplete, collect_connection  # pylint: disable=import-outside-toplevel
+
+    LOG.info("pass 2: structure (paginated Metadata API)")
     started = time.monotonic()
-    payload, error = site.graphql(STRUCTURE_QUERY)
-    data = payload.get("data") or {}
+    data: dict[str, Any] = {}
     errors: list[dict] = []
-    if error:
-        LOG.warning("  [WARN] structure UNREADABLE: %s - every complexity score would be 0", error["error"][:150])
-        errors.append({"listing": "structure", "severity": PRIMARY, **error})
-    elif payload.get("errors"):
-        # ``payload`` is parsed JSON handed straight back by ``_request_json`` on a 200, so unlike
-        # the transport/HTTP paths this text never passed through the byte scrubber. Scrub the
-        # echoed body HERE (#196): a proxy or WAF can reflect the request, and this string is
-        # persisted into assessment.json, report.md and estate.db.
-        detail = f"Metadata API errors: {site.scrub_text(str(payload['errors']))[:200]}"
-        severity = SECONDARY if data.get("workbooks") else PRIMARY
-        LOG.warning("  [WARN] %s (%s)", detail, severity)
-        errors.append({"listing": "structure", "severity": severity, **_record(GRAPHQL_ROOT, 200, detail, 1, started)})
+
+    def fetch(query: str) -> dict:
+        payload, error = site.graphql(query)
+        if error:
+            errors.append({"listing": "structure", "severity": PRIMARY, **error})
+            raise MetadataIncomplete("metadata transport failed")
+        return payload
+
+    try:
+        data["workbooks"] = collect_connection(
+            fetch,
+            "workbooks",
+            STRUCTURE_FIELDS,
+            nested={"sheets": {}, "dashboards": {}, "embeddedDatasources": {"fields": {}}},
+        )
+        data["publishedDatasources"] = collect_connection(
+            fetch, "publishedDatasources", DATASOURCE_STRUCTURE_FIELDS, nested={"upstreamTables": {}}
+        )
+    except MetadataIncomplete as exc:
+        detail = str(exc)
+        LOG.warning("  [WARN] structure UNREADABLE: %s", detail)
+        if not errors:
+            errors.append(
+                {"listing": "structure", "severity": PRIMARY, **_record(GRAPHQL_ROOT, 200, detail, 1, started)}
+            )
     LOG.info("  %-14s %5d workbook node(s) %s", "structure", len(data.get("workbooks") or []), _took(started))
     return data, errors
 

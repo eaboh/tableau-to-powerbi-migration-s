@@ -135,21 +135,16 @@ NO_SURVEY_WARNING = (
 # Tableau content lineage (workbook -> published datasource) is available WITHOUT the Data Management
 # license; only *external* assets (databases/tables upstream of Tableau) require it. This query stays
 # on the free side of that line on purpose.
-LINEAGE_QUERY = """
-query migrationLineage {
-  publishedDatasources {
+LINEAGE_FIELDS = """
     id
     luid
     name
     projectName
     hasExtracts
-    downstreamWorkbooks {
-      luid
-      name
-      projectName
+    downstreamWorkbooks: downstreamWorkbooksConnection(first: 1000) {
+      nodes { id luid name projectName }
+      totalCount pageInfo { hasNextPage endCursor }
     }
-  }
-}
 """
 
 
@@ -518,23 +513,18 @@ def sign_in(server: str, site: str, pat_name: str, pat_secret: str, api_version:
 
 
 def fetch_lineage(session: TableauSession) -> list[dict[str, Any]]:
-    """Run the Metadata API lineage query; return the publishedDatasources list."""
+    """Read complete Metadata datasource pages, refusing incomplete consumer lists."""
+    from tableau_metadata import MetadataIncomplete, collect_connection  # pylint: disable=import-outside-toplevel
+
     url = f"{session.base}/api/metadata/graphql"
-    result = _post_json(
-        url,
-        {"query": LINEAGE_QUERY},
-        headers={"X-Tableau-Auth": session.token},
-    )
-    if result.get("errors"):
-        raise RuntimeError(
-            "Metadata API returned errors: "
-            + redacted_note(
-                json.dumps(result["errors"]),
-                lambda text: redact(text, session.pat_name, session.pat_secret, session.token),
-                limit=400,
-            )
-        )
-    return result.get("data", {}).get("publishedDatasources", [])
+
+    def fetch(query: str) -> dict:
+        return _post_json(url, {"query": query}, headers={"X-Tableau-Auth": session.token})
+
+    try:
+        return collect_connection(fetch, "publishedDatasources", LINEAGE_FIELDS, nested={"downstreamWorkbooks": {}})
+    except MetadataIncomplete as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def download_datasource(session: TableauSession, luid: str, dest: Path) -> Path:
