@@ -56,6 +56,10 @@ migration readiness. `t2p start --project <name>` creates a new run and repeats 
 
 ### Expert and recovery setup
 
+Reference capture follows REST pagination for both workbook and view inventories before applying
+the requested workbook filters and view limit. A failed, incomplete or inconsistent later page
+refuses capture rather than treating a truncated inventory as complete.
+
 For new local folders, workbooks or datasources, before stage writes run
 `python -B scripts\work_dirs.py <slug> --json`; external roots add
 `--runs-parent <parent>` (`--repo-root` alias). Allocation auto-attempts ignored

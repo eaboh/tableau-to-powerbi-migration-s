@@ -957,6 +957,17 @@ CERTIFIED: dict[tuple[str, str], dict[str, str]] = {
             "server-controlled text; the credential-reflection probe pins that property."
         ),
     },
+    ("scripts/capture_tableau_oracle.py", "_list_inventory"): {
+        "ids": (
+            "REFUSED-AT-SEAM: identifiers are held only in the in-memory duplicate-detection set; "
+            "pagination errors contain fixed literals, never the response identifiers."
+        ),
+        "rows": (
+            "SCRUBBED-AT-SINK: raw inventory rows are accumulated only in memory and returned to "
+            "the existing selection/capture path; persisted reference metadata passes through "
+            "write_manifest's scrub_tree. No raw row is logged or written by this helper."
+        ),
+    },
     ("scripts/capture_tableau_oracle.py", "_base_view_record"): {
         # This identity is copied BEFORE artifact_stem validates it; only the sink certifies the copy.
         "view['id']": _INTO_THE_MANIFEST,

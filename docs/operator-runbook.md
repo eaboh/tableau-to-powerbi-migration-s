@@ -771,6 +771,24 @@ These are **expert/manual routes**, not a second normal front door:
 | One `.twb/.twbx` | `python scripts/parse_tableau.py <file> -o <spec>`, then task-tool dispatch of `@tableau-migrator` with the brief; see the [one-workbook guide](start-with-one-workbook.md). |
 | `.tds/.tdsx` | `parse_tableau.py` accepts it directly; model-first phase, no report. |
 
+**Expert live single-workbook download identity.** When calling the installed engine's
+`fetch_tds.py` directly, use the known REST workbook LUID with `--workbook-luid <LUID>` and an
+explicit `--out <absolute-run>\assets\<LUID>_<sanitized-title>.twbx` path. Its `save_outputs`
+function honors an explicit `.twb`/`.twbx` output basename. A browser's numeric workbook ID is
+not a REST LUID. Directory-only output can replace spaces in the title with underscores;
+provenance deliberately does not reverse that lossy spelling for an unprefixed filename.
+The LUID prefix preserves exact matching without relaxing identity checks. Do not rename
+inputs already referenced by a bundle; preserve it and agree the recovery before rerunning.
+
+**Provenance inventory pagination.** The collector requests workbook pages of 1,000 entries
+and follows the reported total before caching one logical inventory. Later pages must retain
+the total and page size, advance the page number, return the expected number of rows and have
+no LUID overlap with earlier pages. A later-page failure refuses the inventory rather than
+caching a partial success. Cancellation and the wrapper's whole-phase deadline still apply.
+Inventory numeric facts use the aggregate `returned_count`; `page_number` is the last page
+fetched. The filtered datasource catalog remains single-page. These checks do not establish
+live source reachability or migration fidelity.
+
 | # | command | ~time (38 wb / 55 assets) | produces |
 |---|---|---|---|
 | 1 | `python scripts/run_engine_survey.py --server <host> --site <site> --pat-name <name> --env-file .env --json _assessment/estate_survey.json` | ⚠️ ~32 s | REST dependency ground truth |

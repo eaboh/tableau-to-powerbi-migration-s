@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="canvas-token" content="__CANVAS_TOKEN__">
+    <title>Tableau Migration Operations</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/client.js" type="module"></script>
+</head>
+<body>
+<aside class="sidebar">
+    <div class="brand"><span class="brand-icon" aria-hidden="true">M</span><div>Migration<span>OPERATIONS WORKSPACE</span></div></div>
+    <nav aria-label="Workspace sections">
+        <button type="button" class="nav active" data-tab="assessment" aria-current="page"><span aria-hidden="true">01</span> Assessment</button>
+        <button type="button" class="nav" data-tab="overview"><span aria-hidden="true">02</span> Batch creation</button>
+        <button type="button" class="nav" data-tab="batches"><span aria-hidden="true">03</span> Batch tracks <span id="batch-count" class="nav-count">0</span></button>
+        <button type="button" class="nav" data-tab="history"><span aria-hidden="true">04</span> Run history</button>
+        <button type="button" class="nav" data-tab="agent-activity"><span aria-hidden="true">05</span> Agent activity</button>
+    </nav>
+    <div class="sidebar-footer"><span class="live-dot"></span> Local &amp; private
+        <p>Evidence stays in your workspace.<br>Tracking stays in private storage.</p>
+        <span class="eyebrow">EXECUTION MODE</span><p>Manual agent handoff<br>No automatic conversions</p>
+    </div>
+</aside>
+<main>
+    <header>
+        <div><p class="eyebrow">TABLEAU &rarr; POWER BI</p><h1>Migration control room</h1><p class="subtitle">From estate assessment to independently validated delivery.</p></div>
+        <button type="button" id="export" class="button secondary">Export progress CSV <span aria-hidden="true">&darr;</span></button>
+    </header>
+    <section class="toolbar" aria-label="Run controls">
+        <label for="run-select">ACTIVE RUN <select id="run-select"><option value="">Select a run</option></select></label>
+        <button type="button" id="refresh" class="button">Refresh evidence</button>
+        <label class="inline-label" for="all-runs"><input type="checkbox" id="all-runs" checked> Export all runs</label>
+        <span id="as-of" class="muted">No evidence snapshot yet</span>
+    </section>
+    <div id="message" role="status" aria-live="polite"></div>
+    <div class="notice"><strong>Evidence, not certification.</strong> Generated files and stored gate results are observations. Batch finishes are operator-reported. Only the repository's independent validation process establishes completion.</div>
+
+    <section id="overview" class="tab-panel" aria-label="Batch creation" hidden>
+        <section class="panel">
+            <div class="section-title"><div><p class="eyebrow">STEP 1 · API METADATA ONLY</p><h2>Assess the environment</h2></div><span class="pill">No run required</span></div>
+            <p class="muted">Approve a site-wide API assessment before selecting a wave. No workbook or datasource files are downloaded. The manual dispatcher allocates an assessment run, then links it here. API metadata can understate artifact-level requirements.</p>
+            <form id="assessment-form">
+                <div class="form-grid">
+                    <label>Assessment label<input name="label" required maxlength="120" placeholder="Environment assessment"></label>
+                    <label>On unresolved gaps<select name="policy"><option value="stop">Stop and ask</option><option value="degrade">Disclose and degrade (gates still apply)</option></select></label>
+                </div>
+                <button class="button" type="submit">Approve &amp; queue API assessment</button>
+            </form>
+        </section>
+        <section class="panel">
+            <div class="section-title"><div><p class="eyebrow">NO ASSESSMENT REQUIRED</p><h2>One-off conversion</h2></div><span class="pill">Start from a source</span></div>
+            <p class="muted">Provide a dashboard URL or an exact project name/LUID. No existing run, assessment or inventory selection is needed. The dispatcher follows the single-workbook/scoped-project workflow and links its allocated run back to this track.</p>
+            <form id="source-form">
+                <div class="form-grid">
+                    <label>Batch label<input name="label" required maxlength="120" placeholder="One-off dashboard conversion"></label>
+                    <label>Source type<select name="sourceKind"><option value="dashboard_url">Dashboard URL</option><option value="project">Project name or LUID</option></select></label>
+                    <label>Numeric comparison<select name="numeric" required><option value="">Choose explicitly</option><option value="required">Required</option><option value="none">Not commissioned</option></select></label>
+                    <label>On unresolved gaps<select name="policy"><option value="stop">Stop and ask</option><option value="degrade">Disclose and degrade (gates still apply)</option></select></label>
+                </div>
+                <label id="source-value-label">Dashboard URL<input id="source-value" name="value" type="url" required maxlength="2048" placeholder="https://tableau.example.com/views/Workbook/Dashboard"></label>
+                <p class="muted">Do not include credentials or access tokens. Queuing starts no process. Normal intake, source resolution, readiness gates and independent validation still apply.</p>
+                <button class="button" type="submit">Approve &amp; queue one-off <span aria-hidden="true">&rarr;</span></button>
+            </form>
+        </section>
+        <div class="metrics">
+            <article><span class="eyebrow">ASSESSED WORKBOOKS</span><strong id="metric-assessed">&mdash;</strong><span id="metric-assessment-label">Not observed</span></article>
+            <article><span class="eyebrow">GENERATED WORKING COPIES</span><strong id="metric-generated">&mdash;</strong><span>Inventory observation only</span></article>
+            <article><span class="eyebrow">PACKAGED UNITS</span><strong id="metric-packaged">&mdash;</strong><span>Not a readiness verdict</span></article>
+            <article class="accent"><span class="eyebrow">FINISHED BATCH STAGES</span><strong id="metric-finished">0</strong><span>Operator-reported, not certified</span></article>
+        </div>
+        <section class="panel">
+            <div class="section-title"><div><p class="eyebrow">YOUR DELIVERY PATH</p><h2>Assessment to delivery</h2></div><span class="pill">Gated workflow</span></div>
+            <ol class="pipeline">
+                <li><span>1</span><strong>Assess</strong><small>Inventory &amp; dependencies</small></li>
+                <li><span>2</span><strong>Convert</strong><small>Deterministic baseline</small></li>
+                <li><span>3</span><strong>Package</strong><small>START_READY + exit 0</small></li>
+                <li><span>4</span><strong>Build</strong><small>Semantic model &amp; report</small></li>
+                <li><span>5</span><strong>Validate &amp; ship</strong><small>Independent sign-off</small></li>
+            </ol>
+            <p id="next-action" class="muted">Select a run and refresh its evidence to see the next diagnostic action.</p>
+        </section>
+        <section class="panel">
+            <div class="section-title"><div><p class="eyebrow">SELECT YOUR NEXT WAVE</p><h2>Work inventory</h2></div><label class="search-label" for="filter">Filter <input id="filter" type="search" placeholder="Name, project, type..."></label></div>
+            <p class="muted">Name-only matches are candidates, not identity proof. Assessment LUIDs remain separate. Select either the assessment or engine row per workbook, not both. Provider ordering must be resolved by the dispatcher.</p>
+            <div class="table-wrap"><table><caption class="sr-only">Assessed and generated work inventory</caption><thead><tr>
+                <th scope="col"><input id="select-all" type="checkbox" aria-label="Select visible work items"></th><th scope="col">Work item</th><th scope="col">Assessment</th><th scope="col">Generated / packaged</th><th scope="col">Batch progress</th>
+            </tr></thead><tbody id="work-rows"></tbody></table></div>
+            <p id="selection-count" class="muted">0 selected</p>
+        </section>
+        <section class="panel">
+            <div class="section-title"><div><p class="eyebrow">APPROVE, THEN HAND OFF</p><h2>Create a batch</h2></div><span class="pill">Queued &ne; running</span></div>
+            <form id="batch-form">
+                <div class="form-grid">
+                    <label>Batch label<input name="label" required maxlength="120" placeholder="Wave 1 - shared providers"></label>
+                    <label>Stage<select name="stage"><option value="investigation">Step 2: Download &amp; investigate assessed wave</option><option value="wave_conversion">Step 3: Prepare NEW conversion wave</option><option value="conversion">Continue conversion in existing prepared run (advanced)</option><option value="assessment">Review existing assessment (no recollection)</option><option value="packaging">Packaging</option><option value="semantic">Semantic model</option><option value="report">Report</option><option value="validation">Validation</option><option value="promotion">Promotion</option></select></label>
+                    <label>Numeric comparison<select name="numeric" required><option value="">Choose explicitly</option><option value="required">Required</option><option value="none">Not commissioned</option></select></label>
+                    <label>On unresolved gaps<select name="policy"><option value="stop">Stop and ask</option><option value="degrade">Disclose and degrade (gates still apply)</option></select></label>
+                    <label>Conversion group size<input name="batchSize" type="number" min="1" max="100" step="1" value="100" required></label>
+                </div>
+                <p id="wave-disclosure" class="muted">Select 1–100 exact assessed workbook rows. Investigation downloads selected workbooks plus required published providers, then attempts parsers; it does not convert. NEW conversions repeat survey, assessment and downloads in new runs, without checkpoint reuse. Each workbook gets a separate conversion track/run; group size organizes one or multiple manual wave groups, not process launches. Record investigation requirements in track notes and private evidence references before converting.</p>
+                <p class="muted">Existing assessment review is run-scoped. New wave stages require assessed workbook LUIDs only (max 100). Advanced continuation stages retain the existing run and packages. A dispatcher still resolves intake, exact identity, provider order and gates.</p>
+                <button class="button" type="submit">Approve &amp; queue batch <span aria-hidden="true">&rarr;</span></button>
+            </form>
+        </section>
+    </section>
+
+    <section id="assessment" class="tab-panel" aria-label="Assessment">
+        <nav class="assessment-nav" aria-label="Assessment pages">
+            <button type="button" class="button secondary" data-assessment-page="assessment-evidence" aria-pressed="true">Evidence</button>
+            <button type="button" class="button secondary" data-assessment-page="assessment-planning" aria-pressed="false">Planning summary</button>
+        </nav>
+        <div id="assessment-evidence" class="assessment-page">
+        <section class="panel"><div class="section-title"><div><p class="eyebrow">ESTATE READINESS</p><h2>Assessment evidence</h2></div><span id="assessment-status" class="pill">Not observed</span></div>
+            <p class="muted">Tracks persisted output, not whether an assessment process is currently running. Degraded and incomplete inventories stay visibly distinct.</p>
+            <div id="assessment-outputs" class="output-grid"></div><div id="assessment-issues"></div>
+        </section>
+        <section class="panel"><h2>Published datasource dependencies</h2><p class="muted">Providers first. Resolve ambiguous identities before dispatching consumers.</p>
+            <div class="table-wrap"><table><thead><tr><th scope="col">Workbook</th><th scope="col">Published datasource</th><th scope="col">Identity</th></tr></thead><tbody id="dependency-rows"></tbody></table></div>
+        </section>
+        <section class="panel"><h2>Recorded phases &amp; diagnostic findings</h2><div id="phases"></div><div id="diagnostic-issues"></div></section>
+        </div>
+        <!-- BEGIN OFFLINE PLANNING -->
+        <div id="assessment-planning" class="assessment-page" hidden>
+            <section class="panel planning-intro">
+                <div class="section-title"><div><p class="eyebrow">UNDERSTAND THE ESTATE</p><h2>Migration planning picture</h2></div>
+                    <div class="report-exports"><button id="planning-export" type="button" class="button secondary">Export assessment summary CSV</button>
+                    <button id="planning-export-html" type="button" class="button secondary">Export assessment report HTML</button></div></div>
+                <p id="planning-status" class="muted"></p><p id="planning-source" class="muted"></p>
+            </section>
+            <h2 class="baseline-heading">Whole-assessment baseline (unfiltered)</h2>
+            <div class="metrics assessment-kpis">
+                <article><span class="eyebrow">ASSESSED WORKBOOKS</span><strong id="planning-workbook-count">&mdash;</strong><span>Observed scope, not necessarily estate-wide</span></article>
+                <article><span class="eyebrow">PROJECT GROUPS</span><strong id="planning-project-count">&mdash;</strong><span>LUID where available; name groups provisional</span></article>
+                <article><span class="eyebrow">REFERENCED DATASOURCE GROUPS</span><strong id="planning-datasource-count">&mdash;</strong><span>Published dependency providers only</span></article>
+                <article><span class="eyebrow">REPORTED SCORES 40+</span><strong id="planning-high-count">&mdash;</strong><span>Structural signal, not effort days</span></article>
+                <article><span class="eyebrow">PUBLISHED DATASOURCES</span><strong id="planning-published-count">Unknown</strong><span>Collected inventory, not just referenced providers</span></article>
+                <article><span class="eyebrow">LIFETIME VIEWS</span><strong id="planning-lifetime-count">Unknown</strong><span id="planning-lifetime-coverage">Coverage unknown</span></article>
+            </div>
+            <div class="assessment-overview" aria-label="Whole-assessment visual summary">
+                <article class="panel"><h3>Recommendations</h3><div id="planning-overview-recommendations"></div><p class="muted">Proposed destinations only. Retirement requires owner review.</p></article>
+                <article class="panel"><h3>Complexity grouping</h3><div id="planning-overview-complexity"></div><p class="muted">Existing structural score bands, not effort estimates.</p></article>
+                <article class="panel"><h3>Utilization (lifetime)</h3>
+                    <label for="planning-usage-top">Top workbooks <output id="planning-usage-top-value" for="planning-usage-top" aria-live="polite">No known usage</output></label>
+                    <input id="planning-usage-top" type="range" min="1" max="1" step="1" value="1" disabled aria-describedby="planning-usage-top-help">
+                    <p id="planning-usage-top-help" class="muted">Extend to all workbooks with known usage. Cumulative share always uses all known lifetime views.</p>
+                    <div id="planning-overview-usage"></div></article>
+            </div>
+            <section class="panel evidence-quality" aria-labelledby="planning-quality-heading">
+                <h3 id="planning-quality-heading">Evidence quality</h3>
+                <div class="quality-grid"><p><strong id="planning-quality-state">Not observed</strong><span>Collection state, not migration certification</span></p>
+                    <p><strong id="planning-quality-coverage">Coverage unknown</strong><span>Observed records do not guarantee full estate coverage</span></p>
+                    <p><strong id="planning-quality-gaps">Unknown is not zero</strong><span>Resolve missing evidence before sequencing work</span></p></div>
+                <details><summary>Evidence limitations &amp; collection findings</summary><div id="planning-notices"></div></details>
+            </section>
+            <nav class="planning-shortcuts" aria-label="Planning summary groups">
+                <a href="#planning-project-section">By project</a><a href="#planning-datasource-section">By datasource</a><a href="#planning-complexity-section">By complexity</a>
+            </nav>
+            <section class="panel" aria-labelledby="planning-charts-heading">
+                <div class="section-title"><div><p class="eyebrow">EXPLORE YOUR NEXT WAVE</p><h2 id="planning-charts-heading" tabindex="-1">Visual wave planner</h2></div>
+                    <button id="planning-chart-reset" type="button" class="button secondary">Reset chart &amp; workbook filters</button></div>
+                <details id="planning-filter-menu" class="filter-menu">
+                    <summary>Filter menu &mdash; <span id="planning-active-filters">0 active attribute filters</span></summary>
+                    <p class="muted">Search menus by attribute. All active filters intersect with charts, sliders and group drill-downs. Missing evidence is unknown, not zero or false. Reset chart &amp; workbook filters clears every filter.</p>
+                    <label>Find an attribute<input id="planning-attribute-search" type="search" placeholder="For example: size, count, date, project"></label>
+                    <p id="planning-attribute-status" class="muted" role="status"></p>
+                    <div id="planning-attribute-grid" class="planning-filters attribute-grid"></div>
+                </details>
+                <p id="planning-filter-error" class="error" role="alert"></p>
+                <h3>Filtered candidate headlines</h3><p id="planning-headline-context" class="muted" role="status"></p>
+                <div id="planning-headlines" class="metrics filtered-headlines" aria-label="Filtered candidate headline figures"></div>
+                <p id="planning-chart-status" class="muted" role="status"></p>
+                <fieldset class="date-sliders"><legend>Last-modified date range (UTC)</legend>
+                    <p class="muted">Drag either slider or use arrow keys. This filters workbook modification dates, not historical usage. Exact date fields are in the filter menu above.</p>
+                    <div class="slider-grid">
+                        <label for="planning-date-from">Modified from <output id="planning-date-from-value" for="planning-date-from">No known dates</output>
+                            <input id="planning-date-from" type="range" min="0" max="0" step="1" disabled></label>
+                        <label for="planning-date-through">Modified through <output id="planning-date-through-value" for="planning-date-through">No known dates</output>
+                            <input id="planning-date-through" type="range" min="0" max="0" step="1" disabled></label>
+                    </div>
+                    <p id="planning-date-coverage" class="muted"></p><button id="planning-clear-dates" type="button" class="button secondary">Clear date range (include unknown)</button>
+                </fieldset>
+                <div class="chart-grid">
+                    <article class="chart-card"><h3>Lifetime usage distribution</h3><p class="muted">Workbook counts, not usage over time. Click a usage bucket to filter.</p><div id="planning-chart-usage" class="chart-bars"></div></article>
+                    <article class="chart-card"><h3>Complexity distribution</h3><p class="muted">Structural scores, not delivery estimates. Unavailable is not zero.</p><div id="planning-chart-complexity" class="chart-bars"></div></article>
+                    <article class="chart-card"><h3>Largest project groups</h3><p id="planning-chart-projects-note" class="muted"></p><div id="planning-chart-projects" class="chart-bars"></div></article>
+                    <article class="chart-card"><h3 id="planning-chart-dates-title">Last modified by month</h3><p id="planning-chart-dates-note" class="muted"></p><div id="planning-chart-dates" class="chart-bars"></div></article>
+                    <article class="chart-card chart-wide"><h3>Lifetime usage versus complexity</h3><p id="planning-scatter-note" class="muted"></p><div id="planning-scatter"></div></article>
+                </div>
+            </section>
+            <details id="planning-project-section" class="panel planning-section"><summary><h2>By project</h2></summary>
+                <p class="muted">Size project waves using workbook counts, proposed destinations and observed complexity. Same-named projects with different LUIDs stay separate.</p>
+                <div class="table-wrap"><table><caption class="sr-only">Assessment grouped by project</caption><thead><tr>
+                    <th scope="col">Project / identity</th><th scope="col">Workbooks</th><th scope="col">Proposed destinations</th><th scope="col">Reported complexity</th><th scope="col">Referenced providers (LUID-linked consumers)</th><th scope="col">Drill down</th>
+                </tr></thead><tbody id="planning-projects"></tbody></table></div>
+            </details>
+            <details id="planning-datasource-section" class="panel planning-section"><summary><h2>By referenced datasource</h2></summary>
+                <p class="muted">Review shared providers first when planning consumer workbooks. Counts and destinations below use LUID-linked consumers only; name-only candidates are separate, not confirmed bindings. Name-only datasource groups may conflate same-named providers.</p>
+                <p id="planning-coverage" class="muted"></p>
+                <div class="table-wrap"><table><caption class="sr-only">Referenced published datasource groups</caption><thead><tr>
+                    <th scope="col">Provider / identity</th><th scope="col">Consumers</th><th scope="col">Project groups</th><th scope="col">Consumer destinations</th><th scope="col">Consumer complexity</th><th scope="col">Drill down</th>
+                </tr></thead><tbody id="planning-datasources"></tbody></table></div>
+            </details>
+            <details id="planning-complexity-section" class="panel planning-section"><summary><h2>By complexity</h2></summary>
+                <p class="muted">Producer score = sheets + 2 &times; dashboards + calculations + 5 &times; LODs + 5 &times; table calculations. The producer uses 40 as the review cutoff for unused workbooks, not as a delivery estimate. Missing structure means unavailable, not simple.</p>
+                <div class="table-wrap"><table><caption class="sr-only">Complexity score distribution</caption><thead><tr>
+                    <th scope="col">Reported score band</th><th scope="col">Workbooks</th><th scope="col">Distribution</th><th scope="col">Proposed destinations</th><th scope="col">Understatement flags</th><th scope="col">Drill down</th>
+                </tr></thead><tbody id="planning-complexity"></tbody></table></div>
+            </details>
+            <details id="planning-detail" class="panel planning-section">
+                <summary><h2 id="planning-detail-title">All assessed workbooks</h2></summary>
+                <div class="section-title"><p id="planning-filter-context" class="muted"></p><button id="planning-reset" class="button secondary" type="button">Reset drill-down</button></div>
+                <div id="planning-quick-controls" class="planning-filters"><label>Search filtered workbooks<input id="planning-search" type="search" placeholder="Workbook, project or LUID"></label>
+                    <label>Proposed destination<select id="planning-tier"><option value="">All destinations</option><option value="migrate">Migrate</option><option value="review">Review</option><option value="archive">Archive</option><option value="retire-candidate">Retire candidate (owner decision)</option><option value="unknown">Unknown</option></select></label>
+                    <label>Project<select id="planning-project"><option value="">All projects</option></select></label>
+                    <label>Referenced provider<select id="planning-provider"><option value="">All providers / unknown coverage</option></select></label>
+                    <label>Complexity<select id="planning-band"><option value="">All score bands</option><option value="zero">Zero / verify structure</option><option value="lower">1-39</option><option value="higher">40+</option><option value="unknown">Unavailable</option></select></label>
+                    <label>Lifetime usage<select id="planning-usage"><option value="">All / unknown included</option><option value="used">More than zero</option><option value="zero">Zero observed lifetime views</option><option value="unknown">Unknown</option></select></label>
+                    <label>Minimum lifetime views<input id="planning-minViews" type="number" min="0" step="1" placeholder="No minimum"></label>
+                    <label>Maximum lifetime views<input id="planning-maxViews" type="number" min="0" step="1" placeholder="No maximum"></label>
+                    <label>Modification metadata<select id="planning-updated"><option value="">Known and unknown</option><option value="known">Known date</option><option value="unknown">Unknown date</option></select></label>
+                    <label>Modified on/after (UTC)<input id="planning-after" type="date"></label>
+                    <label>Modified on/before (UTC)<input id="planning-before" type="date"></label>
+                    <label>Planning signal<select id="planning-signal"><option value="">All signals</option><option value="deliberate">Subscription, alert or custom view present</option><option value="activity-unknown">Deliberate-use counts unknown</option><option value="structure-unknown">Structure / score unavailable</option></select></label>
+                    <label>Sort workbooks<select id="planning-sort"><option value="viewsLifetime:desc">Lifetime views: highest first</option><option value="viewsLifetime:asc">Lifetime views: lowest first</option><option value="updatedAt:desc">Modified: newest first</option><option value="updatedAt:asc">Modified: oldest first</option><option value="score:desc">Complexity: highest first</option><option value="score:asc">Complexity: lowest first</option><option value="sizeMb:desc">Size: largest first</option><option value="name:asc">Name: A-Z</option></select></label>
+                </div>
+                <p class="muted">Filters intersect and apply to parent workbooks in the views table below. Unknown values stay unknown; sorting keeps them last. Dates mean last modified, not last used/refreshed. Rollups above remain whole-assessment totals.</p>
+                <p id="planning-filtered-metrics" class="muted" role="status"></p>
+                <div class="table-wrap"><table><caption class="sr-only">Workbooks in planning drill-down</caption><thead><tr>
+                    <th scope="col">Workbook / source identity</th><th scope="col">Proposed destination</th><th scope="col">Effective reported score</th><th scope="col">LOD / table calc / calc counts</th><th scope="col">Lifetime views</th><th scope="col">Last modified (UTC)</th><th scope="col">Size MB / sheets / dashboards</th><th scope="col">Subscriptions / alerts / custom views</th><th scope="col">Sizing &amp; access caveats</th>
+                </tr></thead><tbody id="planning-workbooks"></tbody></table></div>
+                <div class="planning-pagination"><p id="planning-page-label" class="muted" role="status"></p><button id="planning-prev" class="button secondary" type="button">Previous workbooks</button><button id="planning-next" class="button secondary" type="button">Next workbooks</button></div>
+                <p id="planning-selection-label" class="muted"></p><button id="planning-use-selection" class="button" type="button">Use filtered workbooks in batch</button>
+                <button id="planning-filtered-export" class="button secondary" type="button">Export filtered workbooks &amp; views CSV</button>
+            </details>
+            <details class="panel planning-section"><summary><h2>Tableau views by lifetime usage</h2></summary>
+                <p class="muted">Source: saved raw/views.json. These are Tableau views, not confirmed dashboards. No historical usage or last-viewed date is available. Parent-workbook filters above apply; unmatched parent identities appear only with no workbook filters.</p>
+                <div class="planning-filters"><label>Search views<input id="planning-view-search" type="search" placeholder="View, workbook, project or LUID"></label>
+                    <label>Sort views<select id="planning-view-sort"><option value="viewsLifetime:desc">Lifetime views: highest first</option><option value="viewsLifetime:asc">Lifetime views: lowest first</option><option value="updatedAt:desc">Modified: newest first</option><option value="updatedAt:asc">Modified: oldest first</option><option value="name:asc">Name: A-Z</option></select></label></div>
+                <p id="planning-view-status" class="muted" role="status"></p>
+                <div class="table-wrap"><table><caption class="sr-only">Saved Tableau view inventory</caption><thead><tr>
+                    <th scope="col">View / identity (type unknown)</th><th scope="col">Workbook / project</th><th scope="col">Lifetime views</th><th scope="col">Last modified (UTC)</th>
+                </tr></thead><tbody id="planning-views"></tbody></table></div>
+                <div class="planning-pagination"><button id="planning-view-prev" class="button secondary" type="button">Previous views</button><button id="planning-view-next" class="button secondary" type="button">Next views</button></div>
+            </details>
+            <details class="panel planning-section"><summary><h2>Published datasource inventory</h2></summary>
+                <p class="muted">Source: saved raw/datasources.json, including providers without observed dependency edges. Zero observed consumers does not mean unused; dependency survey coverage may be narrow. Project/provider filters above also apply to this catalog, by exact identity.</p>
+                <div class="planning-filters"><label>Search published datasources<input id="planning-catalog-search" type="search" placeholder="Datasource, project, connection type or LUID"></label>
+                    <label>Sort published datasources<select id="planning-catalog-sort"><option value="confirmedConsumers:desc">Observed consumers: highest first</option><option value="updatedAt:desc">Modified: newest first</option><option value="updatedAt:asc">Modified: oldest first</option><option value="name:asc">Name: A-Z</option></select></label></div>
+                <p id="planning-catalog-status" class="muted" role="status"></p>
+                <div class="table-wrap"><table><caption class="sr-only">Saved published datasource inventory</caption><thead><tr>
+                    <th scope="col">Datasource / identity</th><th scope="col">Project / connection type</th><th scope="col">Last modified (UTC)</th><th scope="col">Certified / extract present</th><th scope="col">Observed linked / candidate consumers</th>
+                </tr></thead><tbody id="planning-catalog"></tbody></table></div>
+                <div class="planning-pagination"><button id="planning-catalog-prev" class="button secondary" type="button">Previous datasources</button><button id="planning-catalog-next" class="button secondary" type="button">Next datasources</button></div>
+            </details>
+        </div>
+        <!-- END OFFLINE PLANNING -->
+    </section>
+
+    <section id="batches" class="tab-panel" aria-label="Batch tracks" hidden>
+        <section class="panel"><div class="section-title"><div><p class="eyebrow">APPROVAL &rarr; HANDOFF &rarr; EVIDENCE</p><h2>Batch tracks</h2></div><span id="batch-total" class="pill">0 batches</span></div>
+            <p class="muted">Batches across all registered runs. Nothing starts automatically. Open a track to copy its dispatcher request or record progress with evidence.</p>
+            <div id="batch-list"></div>
+        </section>
+        <section id="batch-detail" class="panel" hidden>
+            <h2 id="batch-title">Batch detail</h2><div id="batch-info"></div>
+            <label>Dispatcher request<textarea id="handoff" rows="5" readonly></textarea></label>
+            <button type="button" id="copy-handoff" class="button secondary">Copy dispatcher request</button>
+            <form id="attach-form" hidden>
+                <h3>Link the allocated one-off run</h3>
+                <p class="muted">After claiming this batch and allocating through the selected workflow, link its real run. Do not invent or reallocate a run. This records the dispatcher's association, not independently verified source identity.</p>
+                <div class="form-grid">
+                    <label>Absolute allocated run directory<input name="run" required placeholder="C:\migration-runs\001-one-off"></label>
+                    <label>Real owning dispatcher session ID<input name="sessionId" required maxlength="200"></label>
+                </div><button class="button secondary" type="submit">Link allocated run</button>
+            </form>
+            <h3>Track history</h3><ol id="event-list" class="events"></ol>
+            <h3>Record progress</h3>
+            <form id="update-form"><div class="form-grid">
+                <label>Status<select name="status"><option value="running">Running / resume</option><option value="blocked">Blocked</option><option value="finished">Stage finished (operator-reported)</option><option value="cancelled">Cancelled</option></select></label>
+                <label>Real dispatcher session ID<input name="sessionId" required maxlength="200"></label>
+                <label>Evidence reference<input name="evidence" placeholder="Absolute path / gate output / validator sign-off"></label>
+                <label>Progress note<input name="note" required maxlength="2048"></label>
+            </div><button class="button" type="submit">Record transition</button></form>
+        </section>
+    </section>
+
+    <section id="history" class="tab-panel" aria-label="Run history" hidden>
+        <section class="panel"><h2>Run history</h2><p class="muted">Snapshots are timestamped, not live certification. Refresh each run to update its evidence. CSV includes unknown rows for runs not yet refreshed.</p>
+            <div class="table-wrap"><table><thead><tr><th scope="col">Run</th><th scope="col">Assessment</th><th scope="col">Last observation</th><th scope="col">Batch stages finished / total</th><th scope="col">Action</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+        </section>
+        <section class="panel"><h2>Register an external run</h2><p class="muted">For runs allocated with an external runs parent. This registers an existing local directory only; it does not allocate or rename it.</p>
+            <form id="register-form" class="register-form"><label>Absolute run directory<input name="run" required placeholder="C:\migration-runs\001-estate"></label><button class="button secondary" type="submit">Register run</button></form>
+        </section>
+    </section>
+    <section id="agent-activity" class="tab-panel" aria-label="Agent activity" hidden>
+        <section class="panel">
+            <div class="section-title"><h2>Run-linked agents &amp; subagents</h2><button id="agents-refresh" class="button" type="button">Refresh agent activity</button></div>
+            <p class="muted">Uses session IDs recorded in the selected run's run.json, including attribution roots. The optional local Copilot event adapter reports lifecycle events, not verified process liveness. All agents in a linked session may include unrelated work or other runs.</p>
+            <label class="inline-label"><input id="agents-auto" type="checkbox" checked> Refresh every 30 seconds while this page is visible</label>
+            <p id="agents-status" role="status" aria-live="polite"></p>
+            <button id="agents-export" class="button secondary" type="button" disabled>Export agent activity CSV</button>
+            <div id="agents-notices"></div>
+        </section>
+        <div id="agent-sessions"></div>
+    </section>
+    <footer id="workspace-path"></footer>
+</main>
+</body>
+</html>

@@ -161,6 +161,12 @@ def test_raw_inventory_facts_require_the_whole_numeric_envelope(missing: str) ->
         ({"total_available": 1001, "invalid_fields": 1}, "truncated"),
         ({"total_available": 1000, "invalid_fields": 1}, "cannot_establish"),
         ({"total_available": 999}, "cannot_establish"),
+        ({"returned_count": 1463, "total_available": 1463, "page_number": 2, "page_size": 1000}, "complete"),
+        ({"returned_count": 2000, "total_available": 2000, "page_number": 2, "page_size": 1000}, "complete"),
+        ({"returned_count": 1463, "total_available": 1463, "page_number": 3, "page_size": 1000}, "cannot_establish"),
+        ({"returned_count": 1463, "total_available": 1463, "page_number": 1, "page_size": 1000}, "cannot_establish"),
+        ({"returned_count": 1463, "total_available": None, "page_number": 2, "page_size": 1000}, "cannot_establish"),
+        ({"returned_count": 1463, "total_available": 1462, "page_number": 2, "page_size": 1000}, "cannot_establish"),
     ],
 )
 def test_parent_classifies_at_the_raw_event_before_any_result(changes: dict, expected: str) -> None:
@@ -168,6 +174,25 @@ def test_parent_classifies_at_the_raw_event_before_any_result(changes: dict, exp
     state.accept(_facts(**changes))
     assert state.inventory.status == expected, "PARENT_RAW_EVENT_CLASSIFICATION"
     assert state.snapshot is None and state.terminal is None
+
+
+def test_filtered_datasource_catalog_does_not_accept_aggregate_workbook_facts() -> None:
+    row = {
+        "state": "ambiguous",
+        "candidate_count": 1463,
+        "acquisition": {
+            "visible": True,
+            "catalog": _facts(returned_count=1463, total_available=1463, page_number=2, page_size=1000)["facts"],
+            "candidate_luid_sha256": None,
+            "candidate_sha256": None,
+            "detail_sha256": None,
+        },
+    }
+    with pytest.raises(estate.ProvenanceProtocolError):
+        estate._validated_dependency_acquisition(row)
+    row["acquisition"]["catalog"].update(returned_count=2, total_available=2, page_number=1)
+    row["candidate_count"] = 2
+    estate._validated_dependency_acquisition(row)
 
 
 @pytest.mark.parametrize("code", [estate.PROVENANCE_DEADLINE_CODE, estate.PROVENANCE_CRASH_CODE])

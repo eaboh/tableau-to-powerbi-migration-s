@@ -869,10 +869,53 @@ class TableauSession:  # pylint: disable=too-many-instance-attributes
         raise ExportFailed(f"GET {path} -> exhausted {policy.max_attempts} attempts", "transient", "")
 
 
+def _list_inventory(session: TableauSession, collection: str, item: str) -> list[dict[str, Any]]:
+    """Read a complete REST inventory; never return a failed or inconsistent page prefix."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    expected: tuple[int, int] | None = None
+    page = 1
+    while True:
+        path = f"/sites/{session.site_id}/{collection}?pageSize=1000"
+        if page > 1:
+            path += f"&pageNumber={page}"
+        payload = session.get_json(path)
+        rows = (payload.get(collection) or {}).get(item, [])
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows
+        ):
+            raise ValueError("invalid inventory pagination rows")
+        if "pagination" not in payload and page == 1 and len(rows) < 1000:
+            return rows
+        pagination = payload.get("pagination")
+        if not isinstance(pagination, dict) or any(
+            not re.fullmatch(r"[0-9]+", str(pagination.get(key, "")))
+            for key in ("pageNumber", "pageSize", "totalAvailable")
+        ):
+            raise ValueError("invalid inventory pagination metadata")
+        counts = {key: int(pagination[key]) for key in ("pageNumber", "pageSize", "totalAvailable")}
+        if expected is None:
+            expected = (counts["totalAvailable"], counts["pageSize"])
+        if (
+            counts["pageNumber"] != page
+            or counts["pageSize"] <= 0
+            or (counts["totalAvailable"], counts["pageSize"]) != expected
+            or len(rows) != min(counts["pageSize"], max(0, counts["totalAvailable"] - len(out)))
+        ):
+            raise ValueError("inconsistent inventory pagination")
+        ids = {row["id"] for row in rows}
+        if len(ids) != len(rows) or seen.intersection(ids):
+            raise ValueError("repeated identities in inventory pagination")
+        seen.update(ids)
+        out.extend(rows)
+        if len(out) == counts["totalAvailable"]:
+            return out
+        page += 1
+
+
 def list_views(session: TableauSession) -> list[dict[str, Any]]:
     """Every view on the site, with the identity fields the oracle needs to bind results back."""
-    payload = session.get_json(f"/sites/{session.site_id}/views?pageSize=1000")
-    return payload.get("views", {}).get("view", [])
+    return _list_inventory(session, "views", "view")
 
 
 def artifact_stem(view_luid: str) -> str:
@@ -1739,8 +1782,7 @@ def select_views(
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Resolve the views to capture, plus a workbook-LUID -> name index for the manifest."""
     views = list_views(session)
-    payload = session.get_json(f"/sites/{session.site_id}/workbooks?pageSize=1000")
-    names = {wb["id"]: wb["name"] for wb in payload.get("workbooks", {}).get("workbook", [])}
+    names = {wb["id"]: wb["name"] for wb in _list_inventory(session, "workbooks", "workbook")}
     if workbook_ids:
         missing = [luid for luid in dict.fromkeys(workbook_ids) if luid not in names]
         if missing:

@@ -621,7 +621,7 @@ def _published_source(path: Path, raw: bytes | None) -> _PublishedSource:
 
 
 class InventoryCompleteness(NamedTuple):
-    """Numeric evidence from the same response as the cached first-page rows."""
+    """Numeric evidence for the collected rows; page_number is the last page fetched."""
 
     status: Literal["complete", "truncated", "cannot_establish"]
     returned_count: int
@@ -701,6 +701,13 @@ def classify_inventory(facts: dict[str, int | None]) -> InventoryCompleteness:
         return page._replace(status="truncated")
     if page.invalid_fields:
         return page
+    if page.page_number is not None and page.page_number > 1:
+        complete = (
+            page.total_available == page.returned_count
+            and page.page_size == INVENTORY_PAGE_SIZE
+            and page.page_number == (page.returned_count + INVENTORY_PAGE_SIZE - 1) // INVENTORY_PAGE_SIZE
+        )
+        return page._replace(status="complete" if complete else "cannot_establish")
     if (
         page.returned_count > facts["requested_page_size"]
         or page.page_number not in (None, 1)
@@ -854,7 +861,7 @@ class TableauLookup:  # pylint: disable=too-many-instance-attributes
         return redact(text, self._pat[0], self._pat[1], self.token or "")
 
     def workbooks(self) -> list[dict[str, Any]]:
-        """The first inventory page, cached **once per run** with its completeness or failure.
+        """The paginated inventory, cached **once per run** with its completeness or failure.
 
         This is the legacy origin observation, not current published-association authority.
         Latching its failure also avoids repeating a dead initial listing for every input.
@@ -876,10 +883,53 @@ class TableauLookup:  # pylint: disable=too-many-instance-attributes
         return rows
 
     def _workbook_inventory(self) -> tuple[list[dict[str, Any]], InventoryCompleteness]:
+        rows, page = self._workbook_page(1)
+        if not (
+            page.invalid_fields == 0
+            and page.page_number == 1
+            and page.page_size == INVENTORY_PAGE_SIZE
+            and page.total_available is not None
+            and page.total_available > INVENTORY_PAGE_SIZE
+            and len(rows) == INVENTORY_PAGE_SIZE
+        ):
+            return rows, page
+        total = page.total_available
+        seen = self._workbook_luids(rows)
+        last_page = (total + INVENTORY_PAGE_SIZE - 1) // INVENTORY_PAGE_SIZE
+        for number in range(2, last_page + 1):
+            more, observed = self._workbook_page(number)
+            if (
+                observed.invalid_fields
+                or observed.page_number != number
+                or observed.page_size != INVENTORY_PAGE_SIZE
+                or observed.total_available != total
+                or len(more) != min(INVENTORY_PAGE_SIZE, total - len(rows))
+            ):
+                raise ValueError("inconsistent workbook inventory page")
+            luids = self._workbook_luids(more)
+            if seen & luids:
+                raise ValueError("repeated workbook inventory page identity")
+            seen.update(luids)
+            rows.extend(more)
+        aggregate = page._replace(returned_count=len(rows), page_number=last_page)
+        return rows, classify_inventory(aggregate.facts())
+
+    @staticmethod
+    def _workbook_luids(rows: list[dict[str, Any]]) -> set[str]:
+        if any(not isinstance(row.get("id"), str) or not row["id"] for row in rows):
+            raise ValueError("missing workbook inventory identity")
+        luids = {row["id"].lower() for row in rows}
+        if len(luids) != len(rows):
+            raise ValueError("repeated workbook inventory page identity")
+        return luids
+
+    def _workbook_page(self, number: int) -> tuple[list[dict[str, Any]], InventoryCompleteness]:
         if self.reporter.cancelled:
             raise RuntimeError(CANCELLED_CODE)
         status, payload = self._call(
-            "GET", f"/sites/{self.site_id}/workbooks?pageSize={INVENTORY_PAGE_SIZE}", accept="application/json"
+            "GET",
+            f"/sites/{self.site_id}/workbooks?pageSize={INVENTORY_PAGE_SIZE}&pageNumber={number}",
+            accept="application/json",
         )
         if status != 200:
             raise RuntimeError(f"listing workbooks failed: HTTP {status}")
@@ -1120,7 +1170,7 @@ class _WorkbookIndex:
 
     Buckets keep inventory order, so ``candidates[0]`` and ``same_name_count`` mean precisely what
     they meant when each rule was a separate scan of the whole list. The legacy origin inventory is
-    fetched once per run; published associations build a separate index over each input's fresh page.
+    fetched once per run; published associations build a separate index over each input's fresh inventory.
 
     ⚠️ **Only a real string is a name.** An earlier revision of this index kept a malformed ``name``
     hashable by keying it on ``repr``, which invented identity out of nothing: a response whose

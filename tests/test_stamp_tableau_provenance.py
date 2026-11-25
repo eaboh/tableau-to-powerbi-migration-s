@@ -126,10 +126,21 @@ HARVEST_LUID = "4f2c1a9e-3b7d-4c21-9a55-8e0b6d1f7c34"
         (f"{HARVEST_LUID.upper()}_Sales", HARVEST_LUID, "Sales", "luid"),
         (f"{HARVEST_LUID}_Sales___Q3__Review", "a-brand-new-luid", "Sales / Q3: Review", "sanitized_name"),
         (f"{HARVEST_LUID}_Superstore", "some-other-luid", "Superstore", "name"),
+        (f"{HARVEST_LUID}_Lossy_Title", HARVEST_LUID, "Actual / Title", "luid"),
+        ("Sales_Review", HARVEST_LUID, "Sales Review", None),
         ("Sales_Q3_Review", "a", "Sales/Q3 Review", None),
         ("Superstore", "a", "Other", None),
     ],
-    ids=["harvest-luid", "luid-case", "recreated-sanitized", "gone-luid-exact-name", "hand-placed", "absent"],
+    ids=[
+        "harvest-luid",
+        "luid-case",
+        "recreated-sanitized",
+        "gone-luid-exact-name",
+        "luid-before-lossy-title",
+        "plain-downloader-name",
+        "hand-placed",
+        "absent",
+    ],
 )
 def test_origin_matching_prefers_luid_then_name_and_sanitizes_only_harvest_stems(stem, site_id, site_name, matched_by):
     """Harvest writes `<luid>_<sanitized-name>` (20/20 false negatives before LUID matching)."""
@@ -382,6 +393,7 @@ class RecordingSite(prov.TableauLookup):
         inventory_status=200,
         inventory_error=None,
         inventory_document=...,
+        inventory_pages=None,
         content_errors=(),
         content_status=None,
         signout_error=None,
@@ -393,6 +405,7 @@ class RecordingSite(prov.TableauLookup):
         self._inventory_status = inventory_status
         self._inventory_error = inventory_error
         self._inventory_document = inventory_document
+        self.inventory_pages = inventory_pages
         self._content_errors = set(content_errors)
         self._content_status = dict(content_status or {})
         self._signout_error = signout_error
@@ -422,6 +435,10 @@ class RecordingSite(prov.TableauLookup):
             raise self._inventory_error
         if self._inventory_status != 200:
             return self._inventory_status, b"{}"
+        if self.inventory_pages is not None:
+            page_number = int(parse_qs(urlsplit(path).query).get("pageNumber", ["1"])[0])
+            status, document = self.inventory_pages[page_number - 1]
+            return status, document if isinstance(document, bytes) else json.dumps(document).encode()
         if self._inventory_document is not ...:
             document = self._inventory_document
             return 200, document if isinstance(document, bytes) else json.dumps(document).encode()
@@ -1045,7 +1062,7 @@ def test_dynamic_exception_class_names_are_not_a_diagnostic_escape(tmp_path: Pat
 
 @pytest.mark.parametrize(
     ("scenario", "physical", "downloads"),
-    [("distinct", 66, 66), ("cached", 2, 1), ("unmatched", 2, 0)],
+    [("distinct", 66, 66), ("cached", 2, 1), ("unmatched", 2, 0), ("paged", 1, 1)],
 )
 def test_production_live_wire_reconciles_with_independent_transport_counts(
     tmp_path: Path, monkeypatch, scenario: str, physical: int, downloads: int
@@ -1058,11 +1075,16 @@ def test_production_live_wire_reconciles_with_independent_transport_counts(
         _twbx(tmp_path, f"{luid}_Copy_A")
         _twbx(tmp_path, f"{luid}_Copy_B")
         inventory = [{"id": luid, "name": "Copy A"}]
+    elif scenario == "paged":
+        _twbx(tmp_path, f"{_fixture_luid(1462)}_Last_Page")
+        inventory = []
     else:
         inventory = _harvested(tmp_path, physical)
         if scenario == "unmatched":
             inventory = []
-    site = _install(monkeypatch, RecordingSite(LIVE_ENV, workbooks=inventory))
+    site = _install(
+        monkeypatch, _paged_site(1463) if scenario == "paged" else RecordingSite(LIVE_ENV, workbooks=inventory)
+    )
     messages = []
     reporter = prov.WorkerReporter(
         SimpleNamespace(send=lambda message: messages.append(json.loads(json.dumps(message))))
@@ -1076,11 +1098,11 @@ def test_production_live_wire_reconciles_with_independent_transport_counts(
     assert result["input_count"] == len(result["inputs"]) == physical
     assert (site.count("signin"), site.count("inventory"), site.count("content"), site.count("signout")) == (
         1,
-        1,
+        2 if scenario == "paged" else 1,
         downloads,
         1,
     ), "TRANSPORT_COUNTS_582: operation reconciliation changed the call budget"
-    assert len(site.calls) == downloads + 3
+    assert len(site.calls) == downloads + (4 if scenario == "paged" else 3)
     assert sum(1 for record in result["inputs"] if record["origin"]) == (0 if scenario == "unmatched" else physical)
     operations = [message for message in messages if message["kind"] == prov.MSG_OPERATION]
     assert sum(1 for message in operations if message["operation"] == "inventory") == 2
@@ -1128,6 +1150,114 @@ def _inventory_page(row_count: int, pagination: object = ...) -> dict:
     if pagination is not ...:
         document["pagination"] = pagination
     return document
+
+
+def _paged_site(total: int) -> RecordingSite:
+    pages = []
+    for offset in range(0, total, 1000):
+        document = _inventory_page(
+            min(1000, total - offset),
+            {"pageNumber": offset // 1000 + 1, "pageSize": 1000, "totalAvailable": total},
+        )
+        for index, row in enumerate(document["workbooks"]["workbook"], start=offset):
+            row.update(id=_fixture_luid(index), name=f"Fixture {index}")
+        pages.append((200, document))
+    return RecordingSite(LIVE_ENV, inventory_pages=pages)
+
+
+@pytest.mark.parametrize("total", [1000, 1463, 2000])
+def test_workbook_inventory_follows_all_pages_once_and_revalidates_current_identity(total: int) -> None:
+    site = _paged_site(total)
+    rows = site.workbooks()
+
+    assert [row["id"] for row in rows] == [_fixture_luid(index) for index in range(total)]
+    assert site.workbooks() is rows
+    expected_pages = (total + 999) // 1000
+    queries = [parse_qs(urlsplit(path).query) for _, path in site.calls]
+    assert queries == [{"pageSize": ["1000"], "pageNumber": [str(page)]} for page in range(1, expected_pages + 1)]
+    assert site.inventory_completeness.status == "complete"
+    assert site.inventory_completeness.returned_count == total
+    assert site.inventory_completeness.page_number == expected_pages
+
+    current = site.current_workbook(f"{_fixture_luid(total - 1)}_Lossy_Title")
+    assert current["candidate_count"] == current["luid_count"] == 1
+    assert current["workbook_luid_sha256"] == prov.workbook_luid_digest(_fixture_luid(total - 1))
+    assert prov.classify_inventory(current["inventory"]).status == "complete"
+    assert site.count("inventory") == 2 * expected_pages
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["wrong-page", "wrong-size", "changed-total", "short-page", "duplicate-luid", "missing-luid", "http", "decode"],
+)
+def test_later_inventory_page_failure_never_caches_partial_rows(fault: str) -> None:
+    site = _paged_site(1463)
+    document = site.inventory_pages[1][1]
+    if fault == "wrong-page":
+        document["pagination"]["pageNumber"] = 1
+    elif fault == "wrong-size":
+        document["pagination"]["pageSize"] = 500
+    elif fault == "changed-total":
+        document["pagination"]["totalAvailable"] = 1464
+    elif fault == "short-page":
+        document["workbooks"]["workbook"].pop()
+    elif fault == "duplicate-luid":
+        document["workbooks"]["workbook"][0]["id"] = _fixture_luid(0)
+    elif fault == "missing-luid":
+        del document["workbooks"]["workbook"][0]["id"]
+    elif fault == "http":
+        site.inventory_pages[1] = (403, {})
+    else:
+        site.inventory_pages[1] = (200, b"{")
+
+    expected_error = RuntimeError if fault == "http" else ValueError
+    for _ in range(2):
+        with pytest.raises(expected_error):
+            site.workbooks()
+    assert site.count("inventory") == 2
+    assert site.inventory_completeness is None
+
+
+@pytest.mark.parametrize("page_index", [0, 1], ids=["first-page", "later-page"])
+@pytest.mark.parametrize("uppercase", [False, True], ids=["exact", "case-variant"])
+def test_paginated_inventory_rejects_duplicate_identities_within_a_page(page_index: int, uppercase: bool) -> None:
+    site = _paged_site(1463)
+    rows = site.inventory_pages[page_index][1]["workbooks"]["workbook"]
+    duplicate = rows[10]["id"]
+    rows[11]["id"] = duplicate.upper() if uppercase else duplicate
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="repeated workbook inventory page identity"):
+            site.workbooks()
+    assert site.count("inventory") == page_index + 1
+    assert site.inventory_completeness is None
+    assert site.current_workbook(f"{_fixture_luid(1462)}_Title") is None
+
+
+def test_paginated_current_identity_refuses_total_drift() -> None:
+    site = _paged_site(1463)
+    site.workbooks()
+    site.inventory_pages[1][1]["pagination"]["totalAvailable"] = 1464
+
+    assert site.current_workbook(f"{_fixture_luid(1462)}_Title") is None
+    assert site.inventory_completeness.status == "complete"
+
+
+def test_workbook_inventory_checks_cancellation_before_the_next_page(monkeypatch) -> None:
+    site = _paged_site(1463)
+    site.reporter = RecordingReporter()
+    original = site._call
+
+    def cancel_after_first_page(*args, **kwargs):
+        response = original(*args, **kwargs)
+        site.reporter.cancelled = True
+        return response
+
+    monkeypatch.setattr(site, "_call", cancel_after_first_page)
+    with pytest.raises(RuntimeError, match="^cancelled$"):
+        site.workbooks()
+    assert site.count("inventory") == 1
+    assert site.inventory_completeness is None
 
 
 def _build_inventory_page(tmp_path: Path, monkeypatch, row_count: int, pagination: object = ...) -> tuple:

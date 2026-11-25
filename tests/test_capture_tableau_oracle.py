@@ -586,6 +586,101 @@ def test_select_views_refuses_unknown_luid_without_caption_fallback(monkeypatch)
         oracle.select_views(Session(), ["Requested Caption"], 0, ["missing"])
 
 
+def test_select_views_finds_later_page_workbook_and_views_before_applying_limit():
+    calls = []
+    pages = {
+        "/views?pageSize=1000": {
+            "views": {"view": [{"id": "other-view", "workbook": {"id": "other"}}]},
+            "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "3"},
+        },
+        "/views?pageSize=1000&pageNumber=2": {
+            "views": {"view": [{"id": "target-first", "workbook": {"id": "target"}}]},
+            "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "3"},
+        },
+        "/views?pageSize=1000&pageNumber=3": {
+            "views": {"view": [{"id": "target-second", "workbook": {"id": "target"}}]},
+            "pagination": {"pageNumber": "3", "pageSize": "1", "totalAvailable": "3"},
+        },
+        "/workbooks?pageSize=1000": {
+            "workbooks": {"workbook": [{"id": "other", "name": "Duplicate caption"}]},
+            "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "2"},
+        },
+        "/workbooks?pageSize=1000&pageNumber=2": {
+            "workbooks": {"workbook": [{"id": "target", "name": "Duplicate caption"}]},
+            "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "2"},
+        },
+    }
+
+    class Session:
+        site_id = "site-id"
+
+        @staticmethod
+        def get_json(path):
+            suffix = path.removeprefix("/sites/site-id")
+            calls.append(suffix)
+            return pages[suffix]
+
+    selected, names = oracle.select_views(Session(), ["Duplicate caption"], 1, ["target"])
+
+    assert [view["id"] for view in selected] == ["target-first"]
+    assert names == {"other": "Duplicate caption", "target": "Duplicate caption"}
+    assert calls == list(pages)
+
+
+@pytest.mark.parametrize(
+    "second_page",
+    [
+        {"views": {}, "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "2"}},
+        {
+            "views": {"view": [{"id": "first"}]},
+            "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "2"},
+        },
+        {
+            "views": {"view": [{"id": "second"}]},
+            "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "2"},
+        },
+        {
+            "views": {"view": [{"id": "second"}]},
+            "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "3"},
+        },
+        {"views": {"view": [{"id": "second"}]}, "pagination": {"totalAvailable": "invalid"}},
+        {"views": {"view": [{"id": "second"}]}},
+    ],
+)
+def test_inventory_refuses_incomplete_or_inconsistent_later_page(second_page):
+    class Session:
+        site_id = "site-id"
+
+        @staticmethod
+        def get_json(path):
+            if "pageNumber=2" in path:
+                return second_page
+            return {
+                "views": {"view": [{"id": "first"}]},
+                "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "2"},
+            }
+
+    with pytest.raises(ValueError, match="pagination"):
+        oracle.list_views(Session())
+
+
+def test_inventory_propagates_later_page_request_failure():
+    class Session:
+        site_id = "site-id"
+
+        @staticmethod
+        def get_json(path):
+            if "pageNumber=2" in path:
+                raise RuntimeError("HTTP 403 on page 2")
+            return {
+                "views": {"view": [{"id": "first"}]},
+                "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "2"},
+            }
+
+    with pytest.raises(RuntimeError, match="HTTP 403 on page 2"):
+        oracle.list_views(Session())
+
+
 def test_workbook_luid_selection_matches_the_mock_tableau_request_records():
     site = estate.build_site()
     target = site.workbooks[0]
