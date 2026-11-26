@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { requireThat, object, text, stages, statuses, isoDate, OpsError, sourceScope, sourceItem } from "./common.mjs";
 import { needsAllocatedRun, validateWorkflow } from "./workflow.mjs";
+import { validatePlanDependencies } from "./model-planning.mjs";
 
 export const CANVAS_ID = "t2pbi-migration-ops";
 
@@ -104,6 +105,7 @@ function validate(state, workspace) {
         validateWorkflow(batch);
         ids.add(batch.id);
     }
+    validatePlanDependencies(state.batches);
 }
 
 export class Store {

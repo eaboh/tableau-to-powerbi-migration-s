@@ -15,6 +15,11 @@ const schema = (properties, required = Object.keys(properties)) => ({
     type: "object", properties, required, additionalProperties: false,
 });
 const definitions = [
+    ["get_model_suggestions", "Read candidate published-provider overlap for exact selected reports. Compatibility is unknown; never confirms or edits a mapping.",
+        schema({ run: string, luids: { type: "array", items: string, minItems: 1, maxItems: 100, uniqueItems: true } })],
+    ["queue_model_plan", "Queue explicitly confirmed migration style/format and standalone/shared/supplied model mapping. Generated models get one semantic handoff each; report handoffs wait for operator-reported provider progress. No build, rebinding or validation is performed here.",
+        schema({ run: string, label: { ...string, maxLength: 120 }, plan: { oneOf: [{ type: "object" }, { type: "string", maxLength: 49152 }] },
+            numeric: { enum: ["none", "required"] }, policy: { enum: ["stop", "degrade"] } })],
     ["get_state", "List run history and batches; optionally show one saved evidence snapshot. Observations never certify readiness or completion.",
         schema({ run: string }, [])],
     ["get_agent_activity", "Read run.json session anchors and optional local Copilot event logs, including subagents. Recorded lifecycle only, not verified process liveness or run completion.",

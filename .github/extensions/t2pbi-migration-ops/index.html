@@ -103,6 +103,15 @@
                 <p class="muted">Existing assessment review is run-scoped. New wave stages require assessed workbook LUIDs only (max 100). Advanced continuation stages retain the existing run and packages. A dispatcher still resolves intake, exact identity, provider order and gates.</p>
                 <button class="button" type="submit">Approve &amp; queue batch <span aria-hidden="true">&rarr;</span></button>
             </form>
+            <h3>Explicit report-to-model plan</h3>
+            <p class="muted">Choose faithful or redesigned migration and PBIP or PBIR format explicitly. Map every chosen report LUID once. Shared generated models require a real published provider; supplied models remain read-only. This queues manual handoffs, not builds or certification.</p>
+            <form id="model-plan-form">
+                <label>Plan label<input name="label" required maxlength="120"></label>
+                <label>Confirmed migration-plan/1 JSON<textarea name="plan" required maxlength="49152" rows="8" placeholder='{"schema":"migration-plan/1","style":"faithful","format":"pbip","confirmed":true,"models":[{"id":"model1","kind":"standalone","confirmed":true}],"reports":[{"luid":"exact-workbook-LUID","modelId":"model1"}]}'></textarea></label>
+                <label>Numeric comparison<select name="numeric" required><option value="">Choose explicitly</option><option value="required">Required</option><option value="none">Not commissioned</option></select></label>
+                <label>Gap policy<select name="policy"><option value="stop">Stop and ask</option><option value="degrade">Disclose limitations</option></select></label>
+                <button class="button" type="submit">Confirm mapping and queue model/report handoffs</button>
+            </form>
         </section>
     </section>
 

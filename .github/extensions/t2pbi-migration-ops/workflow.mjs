@@ -1,5 +1,6 @@
 import path from "node:path";
 import { object, requireThat, text } from "./common.mjs";
+import { validateModelBatch } from "./model-planning.mjs";
 
 export const workflows = ["api_assessment", "artifact_investigation", "wave_conversion"];
 export const active = (batch) => ["queued", "running", "blocked"].includes(batch.status);
@@ -8,6 +9,7 @@ export const needsAllocatedRun = (batch) => Boolean(batch.source)
 export const assessmentRun = (batch) => batch.parentAssessmentRun ?? batch.run;
 
 export function validateWorkflow(batch) {
+    validateModelBatch(batch);
     if (batch.workflow === undefined) {
         requireThat(batch.parentAssessmentRun === undefined && batch.groupId === undefined,
             "Workflow metadata requires a workflow identity.");

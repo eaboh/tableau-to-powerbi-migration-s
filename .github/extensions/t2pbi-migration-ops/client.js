@@ -68,6 +68,7 @@ function tab(id) {
 function applyAvailability() {
     $("refresh").disabled = !selectedRun;
     $("batch-form").querySelector("button").disabled = !state.snapshot;
+    $("model-plan-form").querySelector("button").disabled = !state.snapshot;
     if (selectedBatch) renderBatchDetail();
     planning.applyAvailability();
     agents.applyAvailability();
@@ -355,6 +356,17 @@ $("assessment-form").addEventListener("submit", (event) => {
         await load();
         tab("batches");
         message("API assessment queued before run allocation; no workbook/datasource downloads and no process started.");
+    });
+});
+$("model-plan-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = Object.fromEntries(new window.FormData(event.currentTarget));
+    work(async () => {
+        const result = await api("queue_model_plan", { ...input, run: selectedRun });
+        selectedBatch = result.batches[0].id;
+        await load();
+        tab("batches");
+        message(`${result.batches.length} model/report handoffs queued, not running. Model mapping remains explicit; host binding checks are still required.`);
     });
 });
 $("source-form").elements.sourceKind.addEventListener("change", () => {

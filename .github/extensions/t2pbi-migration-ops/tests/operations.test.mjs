@@ -10,6 +10,8 @@ import { Store, validateSnapshot } from "../store.mjs";
 import { observeRun, localDirectory } from "../evidence.mjs";
 import { csvCell } from "../common.mjs";
 import { startServer } from "../server.mjs";
+import { planIdentity } from "../model-planning.mjs";
+import { runInNewContext } from "node:vm";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
@@ -39,6 +41,211 @@ async function fixture(t) {
     });
     return { root, workspace, run, snapshot, home, ops, queue };
 }
+
+async function mappedFixture(t) {
+    const result = await fixture(t);
+    result.snapshot.assessment.workbooks = ["a", "b", "c", "d", "e"].map((luid) => ({
+        luid, name: `Report ${luid}`, project: "Project", tier: "migrate", complexity: 1,
+    }));
+    result.snapshot.assessment.dependencies = [["a", "p1"], ["b", "p1"], ["c", "p2"], ["d", "p2"]].map(([workbookLuid, datasourceLuid]) => ({
+        workbookLuid, datasourceLuid, workbookName: `Report ${workbookLuid}`, datasourceName: datasourceLuid,
+    }));
+    await result.ops.call("refresh_run", { run: result.run });
+    const plan = {
+        schema: "migration-plan/1", style: "faithful", format: "pbip", confirmed: true,
+        models: [
+            { id: "m1", kind: "shared", providerLuid: "p1", confirmed: true },
+            { id: "m2", kind: "shared", providerLuid: "p2", confirmed: true },
+            { id: "m3", kind: "standalone", confirmed: true },
+        ],
+        reports: [["a", "m1"], ["b", "m1"], ["c", "m2"], ["d", "m2"], ["e", "m3"]].map(([luid, modelId]) => ({ luid, modelId })),
+    };
+    const queuePlan = (value = plan) => result.ops.call("queue_model_plan", {
+        run: result.run, label: "Explicit mapping", plan: value, numeric: "required", policy: "stop",
+    });
+    return { ...result, plan, queuePlan };
+}
+
+test("mixed mapping creates three model builds and five exact ordered report handoffs", async (t) => {
+    const { ops, plan, queuePlan } = await mappedFixture(t);
+    const queued = await queuePlan();
+    const providers = queued.batches.filter((batch) => batch.stage === "semantic");
+    const reports = queued.batches.filter((batch) => batch.stage === "report");
+    assert.equal(providers.length, 3);
+    assert.equal(reports.length, 5);
+    assert.deepEqual(providers.map((batch) => batch.items[0].sourceLuid), ["p1", "p2", "e"]);
+    for (const report of reports) {
+        const provider = providers.find((batch) => batch.modelId === report.modelId);
+        assert.deepEqual(report.requires, [provider.id]);
+        await assert.rejects(ops.call("get_dispatch", { id: report.id }), /operator-reported/u);
+        const retained = await fs.readFile(ops.store.file);
+        await assert.rejects(ops.call("update_batch", {
+            id: report.id, status: "running", sessionId: "operator", note: "Cannot skip provider", evidence: "",
+        }), /operator-reported/u);
+        assert.deepEqual(await fs.readFile(ops.store.file), retained);
+        assert.deepEqual(report.modelPlan, plan);
+    }
+    for (const provider of providers) {
+        await ops.call("update_batch", { id: provider.id, status: "running", sessionId: "operator", note: "Claimed", evidence: "" });
+        await ops.call("update_batch", { id: provider.id, status: "finished", sessionId: "operator", note: "Stage only", evidence: "private/model-receipt" });
+    }
+    for (const report of reports) {
+        const dispatch = await ops.call("get_dispatch", { id: report.id });
+        assert.match(dispatch.instructions.join("\n"), /operator-reported/u);
+        assert.match(dispatch.instructions.join("\n"), /exact mapped semantic model/u);
+        assert.doesNotMatch(dispatch.instructions.join("\n"), /ready model|validated model/iu);
+    }
+});
+
+test("mapping suggestions never confirm choices or alter private tracking", async (t) => {
+    const { ops, run, plan, queuePlan } = await mappedFixture(t);
+    const before = await fs.readFile(ops.store.file);
+    const proposed = await ops.call("get_model_suggestions", { run, luids: ["a", "b", "c", "d", "e"] });
+    assert.deepEqual(proposed.map((row) => row.providerLuid), ["p1", "p2"]);
+    assert.ok(proposed.every((row) => row.confirmed === false && row.compatibility.startsWith("unknown")));
+    assert.deepEqual(await fs.readFile(ops.store.file), before);
+    await assert.rejects(queuePlan({ ...plan, confirmed: false }), /Explicitly confirm/u);
+    assert.deepEqual(await fs.readFile(ops.store.file), before);
+    const reordered = { reports: [...plan.reports].reverse(), models: [...plan.models].reverse(),
+        confirmed: true, format: "pbip", style: "faithful", schema: "migration-plan/1" };
+    assert.equal(planIdentity(plan), planIdentity(JSON.parse(JSON.stringify(reordered, null, 2))));
+});
+
+test("invalid and ambiguous report mappings are rejected atomically", async (t) => {
+    const { ops, plan, queuePlan } = await mappedFixture(t);
+    const before = await fs.readFile(ops.store.file);
+    for (const change of [
+        (copy) => { copy.format = "pbix"; },
+        (copy) => { copy.reports.push(copy.reports[0]); },
+        (copy) => { copy.reports[0].luid = "unknown"; },
+        (copy) => { copy.reports[0].modelId = "undeclared"; },
+        (copy) => { copy.models[0].providerLuid = "p2"; },
+        (copy) => { copy.models[2].id = "$(touch-private)"; },
+        (copy) => { copy.models[0].confirmed = false; },
+    ]) {
+        const copy = structuredClone(plan);
+        change(copy);
+        await assert.rejects(queuePlan(copy));
+        assert.deepEqual(await fs.readFile(ops.store.file), before);
+    }
+    const queued = await queuePlan();
+    const retained = await fs.readFile(ops.store.file);
+    await assert.rejects(ops.store.change((state) => {
+        const report = state.batches.find((batch) => batch.stage === "report");
+        report.requires = [queued.batches.find((batch) => batch.stage === "semantic" && batch.modelId !== report.modelId).id];
+    }), /same run, plan and semantic model/u);
+    assert.deepEqual(await fs.readFile(ops.store.file), retained);
+});
+
+test("supplied models queue report work only and recheck custody at dispatch", async (t) => {
+    const { ops, root, plan, queuePlan } = await mappedFixture(t);
+    const modelPath = path.join(root, "existing.SemanticModel");
+    await fs.mkdir(modelPath);
+    await fs.writeFile(path.join(modelPath, "model.bim"), "{}");
+    const supplied = { ...plan, models: [{ id: "existing", kind: "supplied", modelPath, confirmed: true }],
+        reports: [{ luid: "a", modelId: "existing" }, { luid: "e", modelId: "existing" }] };
+    const unavailable = (error) => {
+        assert.equal(error.code, "supplied_model_unavailable");
+        assert.ok(!error.message.includes(modelPath));
+        return true;
+    };
+    await assert.rejects(queuePlan({ ...supplied, models: [
+        { ...supplied.models[0], modelPath: `${modelPath}.missing` },
+    ] }), unavailable);
+    const queued = await queuePlan(supplied);
+    assert.ok(queued.batches.every((batch) => batch.stage === "report" && batch.requires.length === 0));
+    const dispatch = await ops.call("get_dispatch", { id: queued.batches[0].id });
+    assert.match(dispatch.instructions.join("\n"), /No semantic-builder work/u);
+    assert.ok(!JSON.stringify(dispatch).includes(modelPath));
+    assert.ok(!JSON.stringify(queued).includes(modelPath));
+    assert.ok(!JSON.stringify(await ops.call("get_state", {})).includes(modelPath));
+    const claimed = await ops.call("update_batch", {
+        id: queued.batches[0].id, status: "running", sessionId: "operator", note: "Read-only model", evidence: "",
+    });
+    assert.ok(!JSON.stringify(claimed).includes(modelPath));
+    assert.ok((await fs.readFile(ops.store.file, "utf8")).includes(modelPath));
+    await fs.rename(modelPath, `${modelPath}.retained`);
+    await assert.rejects(ops.call("get_dispatch", { id: queued.batches[0].id }), unavailable);
+    const retained = await fs.readFile(ops.store.file);
+    await assert.rejects(ops.call("update_batch", {
+        id: queued.batches[0].id, status: "finished", sessionId: "operator", note: "Cannot finish without custody", evidence: "report-stage",
+    }), unavailable);
+    assert.deepEqual(await fs.readFile(ops.store.file), retained);
+});
+
+test("model plan submit is installed once on initial load and does not depend on assessment submission", async () => {
+    const source = await fs.readFile(path.join(repo, ".github/extensions/t2pbi-migration-ops/client.js"), "utf8");
+    const handlers = new Map();
+    const calls = [];
+    const elements = new Map();
+    const element = (id) => {
+        if (!elements.has(id)) elements.set(id, {
+            content: "test-token", elements: {
+                sourceKind: { value: "project", addEventListener() {} },
+                status: { value: "running", addEventListener() {} },
+            },
+            classList: { toggle() {} }, setAttribute() {},
+            addEventListener(name, handler) {
+                const key = `${id}:${name}`;
+                handlers.set(key, [...handlers.get(key) ?? [], handler]);
+            },
+        });
+        return elements.get(id);
+    };
+    runInNewContext(source.replace(/^import .+;$/gmu, ""), {
+        document: { getElementById: element, querySelector: element, querySelectorAll: () => [] },
+        window: {
+            fetch(url) { calls.push(url); return new Promise(() => {}); },
+            FormData: class { *[Symbol.iterator]() {} },
+        },
+        createPlanningView: () => ({}), createAgentView: () => ({}),
+    });
+    const submit = () => ({ currentTarget: {}, preventDefault() {} });
+    assert.equal(handlers.get("model-plan-form:submit").length, 1);
+    handlers.get("assessment-form:submit")[0](submit());
+    handlers.get("assessment-form:submit")[0](submit());
+    assert.equal(handlers.get("model-plan-form:submit").length, 1);
+    handlers.get("model-plan-form:submit")[0](submit());
+    assert.equal(calls.filter((url) => url === "/api/queue_model_plan").length, 1);
+});
+
+test("model planning actions are registered in both transports and UI", async () => {
+    for (const name of ["queue_model_plan", "get_model_suggestions"]) {
+        for (const file of ["extension.mjs", "server.mjs"]) {
+            assert.ok((await fs.readFile(path.join(repo, ".github/extensions/t2pbi-migration-ops", file), "utf8")).includes(`"${name}"`));
+        }
+    }
+    const html = await fs.readFile(path.join(repo, ".github/extensions/t2pbi-migration-ops/index.html"), "utf8");
+    assert.match(html, /id="model-plan-form"/u);
+});
+
+test("model dependency mutation and unsafe supplied custody preserve tracking bytes", async (t) => {
+    const { ops, root, run, plan, queuePlan } = await mappedFixture(t);
+    const before = await fs.readFile(ops.store.file);
+    const within = path.join(run, "supplied");
+    await fs.mkdir(within);
+    await fs.writeFile(path.join(within, "model.bim"), "{}");
+    await fs.writeFile(path.join(root, "model.bim"), "{}");
+    const link = path.join(root, "model-link");
+    await fs.symlink(within, link);
+    for (const modelPath of [within, root, link]) {
+        await assert.rejects(queuePlan({
+            ...plan, models: [{ id: "supplied", kind: "supplied", modelPath, confirmed: true }],
+            reports: [{ luid: "a", modelId: "supplied" }],
+        }));
+        assert.deepEqual(await fs.readFile(ops.store.file), before);
+    }
+    await queuePlan();
+    const retained = await fs.readFile(ops.store.file);
+    for (const change of [
+        (state) => { state.batches[0].requires = [state.batches[1].id]; },
+        (state) => { state.batches.at(-1).modelPlan.style = "redesign"; },
+        (state) => { state.batches.at(-1).requires = []; },
+    ]) {
+        await assert.rejects(ops.store.change(change));
+        assert.deepEqual(await fs.readFile(ops.store.file), retained);
+    }
+});
 
 test("unknown runs export at any stage without claiming zero-complete", async (t) => {
     const { ops, run } = await fixture(t);

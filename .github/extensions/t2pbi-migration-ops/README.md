@@ -75,6 +75,62 @@ Progress/history CSV now includes workflow, parent assessment, execution run and
 including not-yet-attached requests. Selected-parent exports include related conversion events;
 all-run exports emit each event once. Finished stages remain operator-reported, not COMPLETE.
 
+### Explicit mixed report/model planning
+
+After refreshing a run, **Batch creation → Explicit report-to-model plan** accepts confirmed
+`migration-plan/1` JSON. The mapping itself defines the selected report set by exact LUID;
+every report appears once and every declared model is consumed. Choose `style`
+(`faithful` or `redesign`), `format` (`pbip` or `pbir`), and `confirmed: true` explicitly.
+PBIX is not an available authoring format.
+
+```json
+{
+  "schema": "migration-plan/1",
+  "style": "faithful",
+  "format": "pbip",
+  "confirmed": true,
+  "models": [
+    {"id": "shared1", "kind": "shared", "providerLuid": "exact-provider-LUID", "confirmed": true},
+    {"id": "standalone1", "kind": "standalone", "confirmed": true}
+  ],
+  "reports": [
+    {"luid": "report-A-LUID", "modelId": "shared1"},
+    {"luid": "report-B-LUID", "modelId": "shared1"},
+    {"luid": "report-C-LUID", "modelId": "standalone1"}
+  ]
+}
+```
+
+Standalone generated models serve exactly one report. Shared generated models serve at least
+two, and every consumer must reference the same observed published datasource LUID.
+`get_model_suggestions` takes `{run, luids}` and returns overlap candidates only: compatibility
+remains unknown, choices are never filled or confirmed automatically, and tracking is unchanged.
+Models with `kind: supplied` instead require an absolute `modelPath` to an existing semantic
+model folder containing `model.bim` or `definition`. They schedule **report work only**, never
+a semantic build. Mixed supplied/generated mappings are supported in the same plan.
+
+`queue_model_plan` takes `{run, label, plan, numeric, policy}`, with the plan as JSON text or
+an object. Inputs are bounded to 100 reports/models and 48 KB. One semantic batch is created
+per generated model, using a real workbook or published datasource item; report batches carry
+one exact workbook each. Generated-model reports depend on that model's semantic batch.
+Plan choices persist unchanged in private tracking, with a canonical identity insensitive to
+JSON key order, whitespace and model/report array order. All queue and cross-batch validations
+are transactional; rejected plans do not partially enqueue work.
+
+Report handoffs become available after the provider stage has **operator-reported** finished
+status, an owning session and nonempty evidence. This is progress, not schema/binding validation
+or model readiness. Supplied model folder components are checked for symlinks and physical
+containment in either direction with the current run; top-level model content is checked too.
+These are point-in-time checks, repeated at dispatch. The builder must validate actual content,
+custody and the supported model binding again immediately before use. Supplied paths remain
+private host-side state, referenced by model ID rather than embedded in briefs or dispatch output.
+
+This capability schedules explicit manual semantic/report work; it does not modify the canonical
+engine or package-derived brief scope. A new synthetic shared source, model-only/report-only
+package reinterpretation, or arbitrary rebinding of an owned-model package is not commissioned.
+The host must preserve supported source/package identities and refuse unsupported bindings.
+Old planless batches retain their existing behavior and do not imply an established model plan.
+
 ### One-off conversion without assessment
 
 Open **Batch creation → One-off conversion**, enter a dashboard URL or an exact project

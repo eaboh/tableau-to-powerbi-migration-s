@@ -7,6 +7,8 @@ import { summarizeAssessment, assessmentSummaryCsv } from "./assessment-summary.
 import { observeAgents, agentActivityCsv } from "./agent-monitor.mjs";
 import { active, assessmentRun, needsAllocatedRun, workflowDispatch } from "./workflow.mjs";
 import { assessmentHtml } from "./assessment-html.mjs";
+import { promises as fs } from "node:fs";
+import { planIdentity, validateObservedPlan, suggestions, requireProviderProgress, publicBatch } from "./model-planning.mjs";
 
 const transitions = {
     queued: ["running", "cancelled"],
@@ -103,6 +105,13 @@ export class Operations {
             case "queue_source_batch": return this.queueSource(input);
             case "queue_assessment": return this.queueAssessment(input);
             case "queue_wave": return this.queueWave(input);
+            case "queue_model_plan": return this.queueModelPlan(input);
+            case "get_model_suggestions": {
+                fields(input, ["run", "luids"]);
+                const state = await this.store.read();
+                await this.selectedRun(input.run, state);
+                return suggestions(state.snapshots[input.run], input.luids);
+            }
             case "attach_batch_run": return this.attach(input);
             case "get_dispatch": return this.dispatch(input);
             case "update_batch": return this.update(input);
@@ -141,7 +150,7 @@ export class Operations {
                 path: run, name: path.basename(run), asOf: state.snapshots[run]?.asOf ?? null,
                 assessment: state.snapshots[run]?.assessment.status ?? "not_observed",
             })),
-            snapshot, rows: progressRows(snapshot, state.batches), batches: state.batches,
+            snapshot, rows: progressRows(snapshot, state.batches), batches: state.batches.map(publicBatch),
             assessmentSummary: summarizeAssessment(snapshot),
         };
     }
@@ -290,6 +299,34 @@ export class Operations {
         requireThat(batch, "Batch not found.");
         requireThat(["queued", "running", "blocked"].includes(batch.status), "Batch is terminal; it cannot be dispatched.");
         const snapshot = state.snapshots[assessmentRun(batch)];
+        if (batch.modelPlan) {
+            const model = batch.modelPlan.models.find((row) => row.id === batch.modelId);
+            if (model.kind === "supplied") await this.suppliedModel(model.modelPath, batch.run);
+            for (const required of batch.requires) {
+                const provider = state.batches.find((row) => row.id === required);
+                requireProviderProgress(provider);
+            }
+            const safePlan = publicBatch(batch).modelPlan;
+            return {
+                batch: publicBatch(batch), observedAt: snapshot?.asOf ?? null,
+                instructions: [
+                    "MANUAL HANDOFF ONLY; provider progress is operator-reported, never certified model readiness.",
+                    `Explicit migration style: ${safePlan.style}; artifact format: ${safePlan.format}; model identity: ${model.id}.`,
+                    "Claim this batch with the real dispatcher session. Recheck source identity, current working artifacts and field/security compatibility on the actual host.",
+                    ...(batch.stage === "semantic" ? [
+                        "Dispatch pbi-semantic-builder once for this generated model using this exact source and all mapped report contracts. Do not build another model per report.",
+                    ] : [
+                        "Dispatch pbi-report-builder for this report, bound to the exact mapped semantic model identity. Validate its supported local model binding before writing.",
+                        ...(model.kind === "supplied" ? [
+                            "No semantic-builder work. Resolve the supplied model locator from private host tracking by modelId and reverify it at use time; keep that model read-only.",
+                        ] : ["Resolve the finished provider's actual model artifact and verify the binding; a tracking evidence string is not identity proof."]),
+                    ]),
+                    "Use the existing package/schema/custody checks and independent validation. Do not create synthetic provider packages, reinterpret source identity or bypass invalid structures.",
+                    "Shared model recommendations do not establish calculation, type or security compatibility. If the confirmed grouping cannot preserve these contracts, record blocked and ask to split/edit.",
+                    "Keep all mappings unchanged through package/promotion and recheck that every report references the intended shipped model. Finished here is stage progress only, never COMPLETE.",
+                ],
+            };
+        }
         if (batch.workflow || batch.stage === "assessment") {
             return { batch, observedAt: snapshot?.asOf ?? null,
                 dependencies: snapshot?.assessment.dependencies.filter((edge) =>
@@ -340,9 +377,13 @@ export class Operations {
         "Batch ID, real session ID, note and an evidence reference field are required.");
         requireThat(["running", "blocked", "finished", "cancelled"].includes(input.status), "Invalid transition status.");
         if (input.status === "finished") requireThat(text(input.evidence), "Finished stages require an evidence reference.");
-        return this.store.change((state) => {
+        return this.store.change(async (state) => {
             const batch = state.batches.find((row) => row.id === input.id);
             requireThat(batch, "Batch not found.");
+            if (batch.modelPlan && ["running", "finished"].includes(input.status)) {
+                const model = batch.modelPlan.models.find((row) => row.id === batch.modelId);
+                if (model.kind === "supplied") await this.suppliedModel(model.modelPath, batch.run);
+            }
             requireThat(transitions[batch.status].includes(input.status), `Cannot move ${batch.status} to ${input.status}.`);
             requireThat(!batch.ownerSession || batch.ownerSession === input.sessionId,
                 "Batch belongs to another session. Ask its dispatcher to update it.");
@@ -353,7 +394,81 @@ export class Operations {
             batch.updatedAt = new Date().toISOString();
             batch.history.push({ status: input.status, time: batch.updatedAt, sessionId: input.sessionId,
                 note: input.note, evidence: input.evidence });
-            return batch;
+            return publicBatch(batch);
+        });
+    }
+
+    async suppliedModel(input, run) {
+        try {
+            const model = await localDirectory(input);
+            const runPath = await localDirectory(run);
+            const contains = (parent, child) => {
+                const relative = path.relative(parent, child);
+                return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+            };
+            requireThat(!contains(runPath, model) && !contains(model, runPath), "Supplied model custody must be separate from the current run.");
+            let found = false;
+            for (const entry of ["model.bim", "definition"]) {
+                try {
+                    const stat = await fs.lstat(path.join(model, entry));
+                    requireThat(!stat.isSymbolicLink(), "Supplied model content cannot be a symlink.");
+                    found ||= entry === "model.bim" ? stat.isFile() : stat.isDirectory();
+                } catch (error) {
+                    if (error.code !== "ENOENT") throw error;
+                }
+            }
+            requireThat(found, "Supply an existing semantic-model folder; host structural/binding validation is still required.");
+        } catch (error) {
+            if (typeof error.syscall === "string") requireThat(false,
+                "Supplied model custody is unavailable; check the private locator and local access before retrying.",
+                "supplied_model_unavailable");
+            throw error;
+        }
+    }
+
+    async queueModelPlan(input) {
+        fields(input, ["run", "label", "plan", "numeric", "policy"]);
+        requireThat(text(input.label, 120) && ["none", "required"].includes(input.numeric)
+            && ["stop", "degrade"].includes(input.policy), "Provide label, numeric scope and policy.");
+        let plan = input.plan;
+        if (typeof plan === "string") {
+            requireThat(plan.length <= 48 * 1024, "Model plan exceeds 48 KB.");
+            try { plan = JSON.parse(plan); } catch { requireThat(false, "Model plan must be valid JSON data."); }
+        }
+        return this.store.change(async (state) => {
+            await this.selectedRun(input.run, state);
+            const snapshot = state.snapshots[input.run];
+            validateObservedPlan(plan, snapshot);
+            const identity = planIdentity(plan);
+            requireThat(!state.batches.some((row) => active(row) && row.run === input.run
+                && row.modelPlan && row.modelPlan.reports.some((report) => plan.reports.some((candidate) => candidate.luid === report.luid))),
+            "An unfinished model plan already owns selected reports.");
+            for (const model of plan.models) if (model.kind === "supplied") await this.suppliedModel(model.modelPath, input.run);
+            const batches = [];
+            const providers = new Map();
+            for (const model of plan.models.filter((row) => row.kind !== "supplied")) {
+                const report = plan.reports.find((row) => row.modelId === model.id);
+                const luid = model.kind === "shared" ? model.providerLuid : report.luid;
+                const kind = model.kind === "shared" ? "datasource" : "workbook";
+                const batch = this.newWorkflow({
+                    run: input.run, label: input.label, stage: "semantic", numeric: input.numeric, policy: input.policy,
+                    items: [{ key: `${kind}:${luid}`, kind, sourceLuid: luid, name: model.id }],
+                    modelPlan: structuredClone(plan), modelId: model.id, planIdentity: identity, requires: [],
+                });
+                providers.set(model.id, batch.id);
+                batches.push(batch);
+            }
+            for (const report of plan.reports) {
+                const source = snapshot.assessment.workbooks.find((row) => row.luid === report.luid);
+                batches.push(this.newWorkflow({
+                    run: input.run, label: input.label, stage: "report", numeric: input.numeric, policy: input.policy,
+                    items: [{ key: `assessment:${report.luid}`, kind: "workbook", sourceLuid: report.luid, name: source.name }],
+                    modelPlan: structuredClone(plan), modelId: report.modelId, planIdentity: identity,
+                    requires: providers.has(report.modelId) ? [providers.get(report.modelId)] : [],
+                }));
+            }
+            state.batches.push(...batches);
+            return { batches: batches.map(publicBatch), planIdentity: identity };
         });
     }
 
