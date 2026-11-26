@@ -41,7 +41,16 @@ description: Repairs and finishes the Power BI PBIR report that the deterministi
 
 Require the issued v2 brief, the original run and unit, the working report and model binding (`definition.pbir` byPath resolving to the intended shipped model), the handover requests, `viz_fidelity[]`, and the validator's routing (fixable, accepted-limitation, false-claim). Missing authority blocks that step.
 Only the supplied `pbip/` or package `fabric/` is the working tree; pristine `reports/` is reference-only.
-Before any report work, the semantic owner must have handed over a warm saved `cache.abf` with real rows for every commissioned table. If not, stop and route back. Never refresh it yourself.
+Normally require the semantic owner's warm saved `cache.abf` with real rows. If it is unavailable,
+present the gap rather than universally halting: a fresh human-approved static/report-only
+handoff may commission supported layout work without cache. Never refresh the model yourself.
+An approved report-only fallback uses the current per-trigger canvas receipt, exact existing run,
+source/working report and already-valid byPath binding instead of inventing a missing package
+brief. Recheck the actual binding, model structure/fields and custody immediately before use.
+Do not create or edit the supplied model, rebind automatically, rerun acquisition/conversion or
+dispatch a semantic builder. Respect actual tool refusals; no data render/fidelity claim.
+Keep original package/oracle findings and unverified scope in the return. A subsequent blocker
+requires a new human decision; stage progress is never COMPLETE.
 
 ## Tools and skills
 

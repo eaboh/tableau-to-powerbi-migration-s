@@ -1,5 +1,27 @@
 # Operator runbook — migrating a Tableau estate into Fabric
 
+## Human-directed continuation and report-only fallback
+
+Readiness, quality, missing-reference and cache gaps are findings, not universal authoring
+halts. Record the exact blocker and ask for a fresh decision: continue the owned stage with
+disclosed gaps, repair, or eligible report-only fallback. The operations canvas records
+`request_continuation` / `approve_continuation` with the current history index and explicit
+confirmation; use its Batch tracks forms. Never rewrite failed diagnostics as PASS.
+
+Report-only follows separately recorded package and oracle acquisition attempts with actual
+private evidence, retaining their findings. Provide an existing working report in the same
+run already using a supported byPath to a separate usable model; choose migration style and
+PBIP/PBIR format. Approval creates only a report handoff, no semantic-model build, automatic
+rebind, acquisition/conversion rerun or replacement model. Missing/invalid model or binding
+requires supplying/repairing it first. Supplied models remain read-only.
+
+Static/layout work may proceed without cache only if the authoring tool supports it; no data
+render/fidelity claim. Recheck actual files, source identity, model schema/fields and binding
+at use. New blockers need new approval. Authorization/privacy/unsafe filesystem/malformed
+artifact/tool refusals still prohibit that operation: offer manual repair or a supported handoff,
+never permission bypass. Independent checks, earned COMPLETE and deployment consent remain
+required for those claims/actions, regardless of human continuation. — migrating a Tableau estate into Fabric
+
 ## Approved target connection samples
 
 Before connection authoring, choose original endpoints or provide a structured sample. Generate

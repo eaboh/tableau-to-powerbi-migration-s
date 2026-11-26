@@ -4,6 +4,44 @@ Workspace-scoped Copilot SDK canvas: `t2pbi-migration-ops`.
 
 ## Use
 
+### Per-blocker human continuation
+
+For a claimed existing-run batch, record a blocker with `request_continuation`
+(`id`, owning `sessionId`, `category`, bounded non-secret `note`, private `evidence`, boolean
+`attempt`). Readiness, quality, cache, package and oracle gaps are eligible for human decisions;
+authorization, privacy, structure, tool and filesystem refusals require manual repair, not
+override. Acquisition attempts are **operator-reported observations**, not automated proof.
+Record package and oracle attempts separately with their actual evidence before a fallback.
+The batch stays blocked and its diagnostic outcomes remain unchanged.
+
+`approve_continuation` requires `confirmed: true`, exact current `blockIndex`, the owning
+session, `mode: continue|report_only` and a bounded reason. Continue commissions only the same
+run/owned stage; it does not turn any gate into a pass. A new structured blocker invalidates
+prior approval. The transactional store enforces approval when a structured blocked batch
+resumes; legacy planless transition behavior is unchanged. Cancel/repair remain available.
+
+Report-only additionally requires recorded package **and** oracle acquisition attempts, one
+exact workbook LUID, explicit `style` and `format`, absolute private `reportPath` and
+`modelPath`. The existing report must be in this run's working bundle `pbip` or package `fabric`,
+with version-4.0 `definition.pbir` already using a relative byPath to the separate existing
+model. Arbitrary byConnection, automatic rebinding, missing/empty model placeholders,
+symlinks/hardlinks and unsupported structures are refused. Supply/repair the report/model
+before retrying; no replacement model is generated.
+
+Approval atomically queues one supplied-model report batch; no semantic work or acquisition
+rerun. The original blocked batch/findings remain. Dispatch and start/finish recheck parent
+approval, physical binding and bounded independent model marker bytes. File opens use
+no-follow where supported and compare custody metadata. These are point-in-time checks:
+the builder must repeat current schema/field/binding/custody checks immediately before use
+and honor tool refusals. Locator paths remain private tracking, omitted from action responses.
+New parent blockers stop active fallback tracks and invalidate their next handoff.
+
+Report-only dispatch goes directly to the report builder, without mandatory validator triage
+or warm cache as entry halts. Supported static/layout authoring carries **no data render/fidelity
+claim**. Finished is operator-reported stage progress only; independent validation, earned
+COMPLETE and deployment consent remain unchanged. Completed historical fallback tracks stay
+inspectable when a new blocker arrives; their evidence is never reused as new authority.
+
 1. Reload extensions after installing/changing this directory. Ask Copilot to open
    **Tableau Migration Operations** (canvas ID above; no open input).
 2. For a new environment, use **Batch creation → Assess the environment** and manually hand

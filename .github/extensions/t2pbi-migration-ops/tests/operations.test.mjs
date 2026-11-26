@@ -12,6 +12,7 @@ import { csvCell } from "../common.mjs";
 import { startServer } from "../server.mjs";
 import { planIdentity } from "../model-planning.mjs";
 import { runInNewContext } from "node:vm";
+import { fallbackBinding } from "../continuation.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
@@ -41,6 +42,172 @@ async function fixture(t) {
     });
     return { root, workspace, run, snapshot, home, ops, queue };
 }
+
+async function blockedFixture(t) {
+    const context = await fixture(t);
+    await context.ops.call("refresh_run", { run: context.run });
+    const batch = await context.queue();
+    await context.ops.call("update_batch", { id: batch.id, status: "running", sessionId: "owner", note: "Claimed", evidence: "" });
+    const block = (category, attempt = false) => context.ops.call("request_continuation", {
+        id: batch.id, sessionId: "owner", category, attempt, note: "Recorded finding remains unresolved", evidence: "private-evidence",
+    });
+    const approve = (blockIndex, extras = {}) => context.ops.call("approve_continuation", {
+        id: batch.id, sessionId: "owner", blockIndex, confirmed: true, reason: "Human directed scoped work", mode: "continue", ...extras,
+    });
+    return { ...context, batch, block, approve };
+}
+
+test("continuation requires fresh exact approval without changing diagnostics", async (t) => {
+    const { ops, run, batch, block, approve } = await blockedFixture(t);
+    const first = await block("readiness");
+    const before = await fs.readFile(ops.store.file);
+    await assert.rejects(ops.call("update_batch", {
+        id: batch.id, status: "running", sessionId: "owner", note: "Unapproved", evidence: "",
+    }), /approval/u);
+    assert.deepEqual(await fs.readFile(ops.store.file), before);
+    await assert.rejects(approve(first.blockIndex, { confirmed: "true" }));
+    await approve(first.blockIndex);
+    const dispatch = await ops.call("get_dispatch", { id: batch.id });
+    assert.match(dispatch.instructions.join("\n"), /Fresh human continuation/u);
+    await ops.call("update_batch", { id: batch.id, status: "running", sessionId: "owner", note: "Approved resume", evidence: "" });
+    const second = await block("quality");
+    assert.ok(second.blockIndex > first.blockIndex);
+    await assert.rejects(approve(first.blockIndex));
+    await assert.rejects(ops.call("get_dispatch", { id: batch.id }), /fresh human/u);
+    const state = await ops.call("get_state", { run });
+    assert.equal(state.snapshot.diagnostic.certification, "NOT_CHECKED");
+    assert.equal(state.batches[0].history[first.blockIndex].status, "blocked");
+    await approve(second.blockIndex);
+    await ops.call("update_batch", { id: batch.id, status: "running", sessionId: "owner", note: "Approved again", evidence: "" });
+    await ops.call("update_batch", { id: batch.id, status: "blocked", sessionId: "owner", note: "Later ordinary blocker", evidence: "private" });
+    await assert.rejects(ops.call("get_dispatch", { id: batch.id }), /fresh human/u);
+    for (const status of ["running", "finished"]) {
+        await assert.rejects(ops.call("update_batch", { id: batch.id, status, sessionId: "owner", note: "Stale", evidence: "evidence" }));
+    }
+});
+
+test("protected categories cannot be overridden and other sessions cannot approve", async (t) => {
+    const { ops, block, approve } = await blockedFixture(t);
+    for (const category of ["authorization", "privacy", "structure", "tool", "filesystem"]) {
+        const result = await block(category);
+        const before = await fs.readFile(ops.store.file);
+        await assert.rejects(approve(result.blockIndex));
+        assert.deepEqual(await fs.readFile(ops.store.file), before);
+    }
+    const result = await block("cache");
+    await assert.rejects(approve(result.blockIndex, { sessionId: "other-session" }));
+    await approve(result.blockIndex);
+});
+
+async function boundReport(root, run) {
+    const modelPath = path.join(root, "existing.SemanticModel");
+    await fs.mkdir(modelPath);
+    await fs.writeFile(path.join(modelPath, "model.bim"), JSON.stringify({ model: { tables: [{ name: "Orders" }] } }));
+    const reportPath = path.join(run, "bundle", "pbip", "Book.Report");
+    await fs.mkdir(reportPath, { recursive: true });
+    await fs.writeFile(path.join(reportPath, "definition.pbir"), JSON.stringify({
+        version: "4.0", datasetReference: { byPath: { path: path.relative(reportPath, modelPath).split(path.sep).join("/") } },
+    }));
+    return { reportPath, modelPath };
+}
+
+test("report-only fallback preserves blockers, queues no semantic work and rechecks exact binding", async (t) => {
+    const { ops, root, run, batch, block, approve } = await blockedFixture(t);
+    const paths = await boundReport(root, run);
+    const original = await fs.readFile(path.join(paths.modelPath, "model.bim"));
+    const oracle = await block("oracle", true);
+    await assert.rejects(approve(oracle.blockIndex, { mode: "report_only", ...paths, style: "faithful", format: "pbip" }), /package AND oracle/u);
+    const packageBlock = await block("package", true);
+    const result = await approve(packageBlock.blockIndex, { mode: "report_only", ...paths, style: "faithful", format: "pbip" });
+    const child = result.reportBatch;
+    assert.equal(child.stage, "report");
+    assert.deepEqual(child.requires, []);
+    assert.equal(result.batch.status, "blocked");
+    assert.ok(!JSON.stringify(result).includes(paths.modelPath));
+    assert.ok(!JSON.stringify(result).includes(paths.reportPath));
+    await assert.rejects(approve(packageBlock.blockIndex, { mode: "report_only", ...paths, style: "faithful", format: "pbip" }), /already/u);
+    const dispatch = await ops.call("get_dispatch", { id: child.id });
+    assert.match(dispatch.instructions.join("\n"), /pbi-report-builder directly/u);
+    assert.match(dispatch.instructions.join("\n"), /No semantic-builder work/u);
+    assert.match(dispatch.instructions.join("\n"), /no data render\/fidelity claim/u);
+    await ops.call("update_batch", { id: child.id, status: "running", sessionId: "owner", note: "Report only", evidence: "" });
+    const childBlock = await ops.call("request_continuation", {
+        id: child.id, sessionId: "owner", category: "quality", attempt: false, note: "Child has a new gap", evidence: "private",
+    });
+    await assert.rejects(ops.call("get_dispatch", { id: child.id }), /fresh human/u);
+    await ops.call("approve_continuation", { id: child.id, sessionId: "owner", blockIndex: childBlock.blockIndex,
+        confirmed: true, mode: "continue", reason: "Human approved report gap" });
+    await ops.call("update_batch", { id: child.id, status: "running", sessionId: "owner", note: "Report resumed", evidence: "" });
+    const bindingPath = path.join(paths.reportPath, "definition.pbir");
+    const valid = await fs.readFile(bindingPath);
+    await fs.writeFile(bindingPath, JSON.stringify({ version: "4.0", datasetReference: { byConnection: { connectionString: "unapproved" } } }));
+    const retained = await fs.readFile(ops.store.file);
+    await assert.rejects(ops.call("update_batch", { id: child.id, status: "finished", sessionId: "owner", note: "Invalid binding", evidence: "layout" }));
+    assert.deepEqual(await fs.readFile(ops.store.file), retained);
+    await fs.writeFile(bindingPath, valid);
+    await ops.call("update_batch", { id: child.id, status: "finished", sessionId: "owner", note: "Static layout only, unverified data", evidence: "layout" });
+    await block("oracle", true);
+    const state = await ops.call("get_state", { run });
+    assert.equal(state.batches.find((row) => row.id === child.id).status, "finished");
+    assert.equal(state.snapshot.diagnostic.certification, "NOT_CHECKED");
+    assert.deepEqual(await fs.readFile(path.join(paths.modelPath, "model.bim")), original);
+});
+
+test("structured private evidence is omitted from every public projection including CSV", async (t) => {
+    const { ops, batch, approve } = await blockedFixture(t);
+    const evidence = "/private/customer/oracle-attempt.log";
+    const result = await ops.call("request_continuation", {
+        id: batch.id, sessionId: "owner", category: "oracle", attempt: true, note: "Source capture failed", evidence,
+    });
+    const choice = await approve(result.blockIndex);
+    for (const value of [result, choice, await ops.call("get_state", {}), await ops.call("get_dispatch", { id: batch.id }),
+        await ops.call("export_csv", {}), await ops.call("update_batch", {
+            id: batch.id, status: "running", sessionId: "owner", note: "Approved", evidence,
+        })]) {
+        assert.ok(!JSON.stringify(value).includes(evidence));
+    }
+    assert.ok((await fs.readFile(ops.store.file, "utf8")).includes(evidence));
+});
+
+test("attached conversion wave honors fresh scoped continuation instead of readiness halt", async (t) => {
+    const { ops, root, run, snapshot } = await fixture(t);
+    const batch = ops.newWorkflow({ workflow: "wave_conversion", parentAssessmentRun: path.join(root, "assessment"),
+        groupId: "group", run, stage: "conversion", label: "Wave", numeric: "none", policy: "stop",
+        items: [{ key: "assessment:source-001", kind: "workbook", sourceLuid: "source-001", name: "Book" }] });
+    await ops.store.change((state) => { state.runs.push(run); state.snapshots[run] = snapshot; state.batches.push(batch); });
+    await ops.call("update_batch", { id: batch.id, status: "running", sessionId: "owner", note: "Claimed", evidence: "" });
+    const privateEvidence = "/private/customer/reference-evidence.log";
+    const result = await ops.call("request_continuation", { id: batch.id, sessionId: "owner",
+        category: "readiness", attempt: false, note: "Missing reference", evidence: privateEvidence });
+    const attached = await ops.call("attach_batch_run", { id: batch.id, sessionId: "owner", run });
+    assert.ok(!JSON.stringify(attached).includes(privateEvidence));
+    await ops.call("approve_continuation", { id: batch.id, sessionId: "owner", blockIndex: result.blockIndex,
+        confirmed: true, mode: "continue", reason: "Human approved scoped authoring" });
+    const dispatch = await ops.call("get_dispatch", { id: batch.id });
+    assert.match(dispatch.instructions.join("\n"), /Fresh human continuation/u);
+    assert.doesNotMatch(dispatch.instructions.join("\n"), /Require current package-cohort START_READY AND/u);
+});
+
+test("fallback binding refuses hardlinks and stale approvals stop an active child", async (t) => {
+    const { ops, root, run, block, approve } = await blockedFixture(t);
+    const paths = await boundReport(root, run);
+    const binding = path.join(paths.reportPath, "definition.pbir");
+    const duplicate = path.join(root, "aliased.pbir");
+    await fs.link(binding, duplicate);
+    await assert.rejects(fallbackBinding(run, paths.reportPath, paths.modelPath), /independent/u);
+    await fs.unlink(duplicate);
+    await block("oracle", true);
+    const current = await block("package", true);
+    const result = await approve(current.blockIndex, { mode: "report_only", ...paths, style: "faithful", format: "pbip" });
+    await ops.call("update_batch", { id: result.reportBatch.id, status: "running", sessionId: "owner", note: "Report only", evidence: "" });
+    await block("quality");
+    await assert.rejects(ops.call("get_dispatch", { id: result.reportBatch.id }), /stale/u);
+    await assert.rejects(ops.call("update_batch", {
+        id: result.reportBatch.id, status: "running", sessionId: "owner", note: "Old approval", evidence: "",
+    }), /stale/u);
+    const state = await ops.call("get_state", {});
+    assert.equal(state.batches.find((row) => row.id === result.reportBatch.id).status, "blocked");
+});
 
 async function mappedFixture(t) {
     const result = await fixture(t);
@@ -192,25 +359,32 @@ test("model plan submit is installed once on initial load and does not depend on
         });
         return elements.get(id);
     };
-    runInNewContext(source.replace(/^import .+;$/gmu, ""), {
+    runInNewContext(source.replace(/^import .+;$/gmu, "") + '\nselectedBatch = "test-batch";', {
         document: { getElementById: element, querySelector: element, querySelectorAll: () => [] },
         window: {
             fetch(url) { calls.push(url); return new Promise(() => {}); },
-            FormData: class { *[Symbol.iterator]() {} },
+            FormData: class { *[Symbol.iterator]() { yield ["mode", "continue"]; yield ["confirmed", "on"]; yield ["blockIndex", "0"]; } },
         },
         createPlanningView: () => ({}), createAgentView: () => ({}),
     });
     const submit = () => ({ currentTarget: {}, preventDefault() {} });
     assert.equal(handlers.get("model-plan-form:submit").length, 1);
+    for (const name of ["blocker-form", "continuation-form"]) assert.equal(handlers.get(`${name}:submit`).length, 1);
     handlers.get("assessment-form:submit")[0](submit());
     handlers.get("assessment-form:submit")[0](submit());
     assert.equal(handlers.get("model-plan-form:submit").length, 1);
     handlers.get("model-plan-form:submit")[0](submit());
     assert.equal(calls.filter((url) => url === "/api/queue_model_plan").length, 1);
+    for (const name of ["blocker-form", "continuation-form"]) {
+        assert.equal(handlers.get(`${name}:submit`).length, 1);
+        handlers.get(`${name}:submit`)[0](submit());
+    }
+    assert.equal(calls.filter((url) => url === "/api/request_continuation").length, 1);
+    assert.equal(calls.filter((url) => url === "/api/approve_continuation").length, 1);
 });
 
 test("model planning actions are registered in both transports and UI", async () => {
-    for (const name of ["queue_model_plan", "get_model_suggestions"]) {
+    for (const name of ["queue_model_plan", "get_model_suggestions", "request_continuation", "approve_continuation"]) {
         for (const file of ["extension.mjs", "server.mjs"]) {
             assert.ok((await fs.readFile(path.join(repo, ".github/extensions/t2pbi-migration-ops", file), "utf8")).includes(`"${name}"`));
         }

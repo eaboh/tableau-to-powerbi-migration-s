@@ -20,7 +20,8 @@ const assets = new Map([
 ]);
 const actions = new Set(["get_state", "register_run", "refresh_run", "queue_batch", "queue_source_batch",
     "attach_batch_run", "get_dispatch", "update_batch", "export_csv", "export_assessment_csv", "get_agent_activity",
-    "queue_assessment", "queue_wave", "export_assessment_html", "queue_model_plan", "get_model_suggestions"]);
+    "queue_assessment", "queue_wave", "export_assessment_html", "queue_model_plan", "get_model_suggestions",
+    "request_continuation", "approve_continuation"]);
 
 async function body(request) {
     let bytes = 0;

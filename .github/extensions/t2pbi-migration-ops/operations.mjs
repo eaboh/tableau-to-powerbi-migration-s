@@ -9,6 +9,7 @@ import { active, assessmentRun, needsAllocatedRun, workflowDispatch } from "./wo
 import { assessmentHtml } from "./assessment-html.mjs";
 import { promises as fs } from "node:fs";
 import { planIdentity, validateObservedPlan, suggestions, requireProviderProgress, publicBatch } from "./model-planning.mjs";
+import { categories, overridable, currentBlock, currentApproval, requireFallbackAuthority, fallbackBinding, safeReason } from "./continuation.mjs";
 
 const transitions = {
     queued: ["running", "cancelled"],
@@ -114,6 +115,8 @@ export class Operations {
             }
             case "attach_batch_run": return this.attach(input);
             case "get_dispatch": return this.dispatch(input);
+            case "request_continuation": return this.requestContinuation(input);
+            case "approve_continuation": return this.approveContinuation(input);
             case "update_batch": return this.update(input);
             case "export_csv": return this.export(input);
             case "export_assessment_csv": {
@@ -299,6 +302,23 @@ export class Operations {
         requireThat(batch, "Batch not found.");
         requireThat(["queued", "running", "blocked"].includes(batch.status), "Batch is terminal; it cannot be dispatched.");
         const snapshot = state.snapshots[assessmentRun(batch)];
+        if (currentBlock(batch) && batch.status === "blocked") {
+            requireThat(currentApproval(batch)?.mode === "continue",
+                "Record a fresh human continuation decision, or repair and recheck the protected operation.");
+        }
+        if (batch.fallback) {
+            requireFallbackAuthority(batch, state.batches.find((row) => row.id === batch.fallback.parentId));
+            const model = batch.modelPlan.models[0];
+            await fallbackBinding(batch.run, batch.fallback.reportPath, model.modelPath);
+            return { batch: publicBatch(batch), instructions: [
+                "APPROVED REPORT-ONLY FALLBACK, manual handoff only. Claim with your real owning session.",
+                "Dispatch pbi-report-builder directly for the exact private report/model paths in host tracking. No semantic-builder work, validator triage, acquisition/conversion rerun or replacement model.",
+                "Recheck current byPath binding, model/schema/field validity and physical custody immediately before use. Keep the supplied model read-only; never rebind automatically.",
+                "No warm cache is required for supported static/layout authoring. Respect actual tool support and refusals; no data render/fidelity claim.",
+                "Keep the package/oracle blockers and evidence ceilings. This approval covers only this trigger, not later blockers.",
+                "Retain independent validation and all unresolved findings. Finished is operator-reported report progress, never COMPLETE or data fidelity.",
+            ] };
+        }
         if (batch.modelPlan) {
             const model = batch.modelPlan.models.find((row) => row.id === batch.modelId);
             if (model.kind === "supplied") await this.suppliedModel(model.modelPath, batch.run);
@@ -328,13 +348,13 @@ export class Operations {
             };
         }
         if (batch.workflow || batch.stage === "assessment") {
-            return { batch, observedAt: snapshot?.asOf ?? null,
+            return { batch: publicBatch(batch), observedAt: snapshot?.asOf ?? null,
                 dependencies: snapshot?.assessment.dependencies.filter((edge) =>
                     batch.items.some((item) => item.sourceLuid === edge.workbookLuid)) ?? [],
-                instructions: workflowDispatch(batch) };
+                instructions: workflowDispatch(batch, currentApproval(batch)?.mode === "continue") };
         }
         return {
-            batch, observedAt: snapshot?.asOf ?? null,
+            batch: publicBatch(batch), observedAt: snapshot?.asOf ?? null,
             dependencies: snapshot?.assessment.dependencies ?? [],
             instructions: [
                 "MANUAL HANDOFF ONLY. Reading this action does not start work or reserve a session.",
@@ -360,7 +380,10 @@ export class Operations {
                 `Numeric comparison commissioned: ${batch.numeric}; policy: ${batch.policy}. Other intake choices remain unestablished.`,
                 "Issue each exact unit's current v2 private brief at <run>/assessment/briefs/<exact-unit>/migration-brief.md before packaging.",
                 "Resolve physical unit names/LUIDs and providers first. Dispatch @tableau-migrator via the task/subagent tool, passing exact run, brief and working paths.",
-                "Require current package-cohort START_READY AND process exit 0 before any builder or validator work.",
+                ...(currentApproval(batch)?.mode === "continue" ? [
+                    "Fresh human continuation approved for the recorded blocker only. Preserve failed diagnostics; resume this exact run and owned stage with explicit unverified scope.",
+                    "Readiness/quality/cache evidence is not an entry halt under this approval. Structural/custody/privacy/authorization/tool refusals still prohibit the affected operation.",
+                ] : ["Require current package-cohort START_READY AND process exit 0, or request an explicit per-blocker human continuation before authoring."]),
                 "TMDL/DAX belongs to pbi-semantic-builder; PBIR to pbi-report-builder; validator is read-only.",
                 "Credential/dialog refusal: stop and ask a human. Toolkit/engine gate defect: stop, route and ask; never patch silently.",
                 "Independent @pbi-migration-validator comparison on shipped bytes with data and the final check are required for completion.",
@@ -380,6 +403,10 @@ export class Operations {
         return this.store.change(async (state) => {
             const batch = state.batches.find((row) => row.id === input.id);
             requireThat(batch, "Batch not found.");
+            if (batch.fallback && ["running", "finished"].includes(input.status)) {
+                requireFallbackAuthority(batch, state.batches.find((row) => row.id === batch.fallback.parentId));
+                batch.fallbackEvidence = await fallbackBinding(batch.run, batch.fallback.reportPath, batch.modelPlan.models[0].modelPath);
+            }
             if (batch.modelPlan && ["running", "finished"].includes(input.status)) {
                 const model = batch.modelPlan.models.find((row) => row.id === batch.modelId);
                 if (model.kind === "supplied") await this.suppliedModel(model.modelPath, batch.run);
@@ -394,6 +421,13 @@ export class Operations {
             batch.updatedAt = new Date().toISOString();
             batch.history.push({ status: input.status, time: batch.updatedAt, sessionId: input.sessionId,
                 note: input.note, evidence: input.evidence });
+            if (["cancelled", "blocked"].includes(input.status)) for (const child of state.batches.filter((row) =>
+                row.fallback?.parentId === batch.id && row.status === "running")) {
+                child.status = "blocked";
+                child.updatedAt = batch.updatedAt;
+                child.history.push({ status: "blocked", time: child.updatedAt, sessionId: child.ownerSession,
+                    note: "Original batch changed; report-only approval is stale.", evidence: "" });
+            }
             return publicBatch(batch);
         });
     }
@@ -416,6 +450,7 @@ export class Operations {
                 } catch (error) {
                     if (error.code !== "ENOENT") throw error;
                 }
+
             }
             requireThat(found, "Supply an existing semantic-model folder; host structural/binding validation is still required.");
         } catch (error) {
@@ -426,6 +461,75 @@ export class Operations {
         }
     }
 
+    async requestContinuation(input) {
+        fields(input, ["id", "sessionId", "category", "note", "evidence", "attempt"]);
+        requireThat(text(input.id) && text(input.sessionId, 200) && categories.includes(input.category)
+            && safeReason(input.note) && text(input.evidence) && typeof input.attempt === "boolean",
+        "Record the exact blocker, non-secret note/evidence and explicit acquisition-attempt observation.");
+        return this.store.change((state) => {
+            const batch = state.batches.find((row) => row.id === input.id);
+            requireThat(batch?.run && batch.ownerSession === input.sessionId && ["running", "blocked"].includes(batch.status),
+                "The owning dispatcher must claim an existing-run batch before recording a blocker.");
+            batch.status = "blocked";
+            batch.updatedAt = new Date().toISOString();
+            batch.history.push({ status: "blocked", time: batch.updatedAt, sessionId: input.sessionId,
+                note: input.note, evidence: input.evidence, blocker: { category: input.category, attempt: input.attempt } });
+            for (const child of state.batches.filter((row) => row.fallback?.parentId === batch.id && row.status === "running")) {
+                child.status = "blocked";
+                child.updatedAt = batch.updatedAt;
+                child.history.push({ status: "blocked", time: child.updatedAt, sessionId: child.ownerSession,
+                    note: "Original blocker changed; report-only approval is stale.", evidence: "" });
+            }
+            return { batch: publicBatch(batch), blockIndex: batch.history.length - 1,
+                decisions: overridable.includes(input.category) ? ["continue", "report_only", "repair"] : ["repair"] };
+        });
+    }
+
+    async approveContinuation(input) {
+        fields(input, ["id", "sessionId", "blockIndex", "mode", "confirmed", "reason", "reportPath", "modelPath", "style", "format"],
+            ["id", "sessionId", "blockIndex", "mode", "confirmed", "reason"]);
+        requireThat(input.confirmed === true && safeReason(input.reason) && Number.isInteger(input.blockIndex)
+            && ["continue", "report_only"].includes(input.mode), "Explicit fresh human approval and a bounded reason are required.");
+        return this.store.change(async (state) => {
+            const batch = state.batches.find((row) => row.id === input.id);
+            const block = batch && currentBlock(batch);
+            requireThat(batch?.status === "blocked" && batch.ownerSession === input.sessionId
+                && block?.index === input.blockIndex && overridable.includes(block.category),
+            "Approval must name this owning session's current overridable blocker.");
+            requireThat(!currentApproval(batch), "This blocker already has a decision; record a new blocker for another decision.");
+            const choice = { blockIndex: input.blockIndex, mode: input.mode, sessionId: input.sessionId,
+                confirmed: true, reason: input.reason };
+            if (input.mode === "continue") {
+                requireThat(input.reportPath === undefined && input.modelPath === undefined,
+                    "Continue reuses existing paths; fallback locators are not accepted.");
+                batch.continuation = choice;
+                return { batch: publicBatch(batch), next: "Resume the same batch; diagnostics remain unchanged." };
+            }
+            requireThat(["package", "oracle"].every((category) => batch.history.some((event) =>
+                event.blocker?.category === category && event.blocker.attempt === true
+                && event.sessionId === batch.ownerSession && text(event.evidence))),
+            "Report-only requires prior recorded package AND oracle acquisition attempts with evidence; observations are operator-reported.");
+            requireThat(batch.items.length === 1 && batch.items[0].kind === "workbook" && text(batch.items[0].sourceLuid)
+                && text(input.reportPath) && path.isAbsolute(input.reportPath) && text(input.modelPath) && path.isAbsolute(input.modelPath),
+            "Fallback requires one exact workbook LUID, existing working report and existing separate model.");
+            requireThat(["faithful", "redesign"].includes(input.style) && ["pbip", "pbir"].includes(input.format),
+                "Explicitly choose migration style and artifact format for the report-only fallback.");
+            const evidence = await fallbackBinding(batch.run, input.reportPath, input.modelPath);
+            const plan = { schema: "migration-plan/1", style: input.style,
+                format: input.format, confirmed: true,
+                models: [{ id: "fallback-model", kind: "supplied", modelPath: input.modelPath, confirmed: true }],
+                reports: [{ luid: batch.items[0].sourceLuid, modelId: "fallback-model" }] };
+            batch.continuation = choice;
+            const child = this.newWorkflow({ run: batch.run, stage: "report", items: structuredClone(batch.items),
+                label: batch.label, numeric: batch.numeric, policy: batch.policy, modelPlan: plan,
+                modelId: "fallback-model", planIdentity: planIdentity(plan), requires: [],
+                fallback: { parentId: batch.id, blockIndex: input.blockIndex, reportPath: input.reportPath },
+                continuationOwner: batch.ownerSession, fallbackEvidence: evidence });
+            state.batches.push(child);
+            return { batch: publicBatch(batch), reportBatch: publicBatch(child),
+                next: "Direct report-builder handoff only; no replacement model or fidelity authority." };
+        });
+    }
     async queueModelPlan(input) {
         fields(input, ["run", "label", "plan", "numeric", "policy"]);
         requireThat(text(input.label, 120) && ["none", "required"].includes(input.numeric)
@@ -513,13 +617,13 @@ export class Operations {
             return batch;
         };
         const existing = check(await this.store.read());
-        if (existing.run === run) return existing;
+        if (existing.run === run) return publicBatch(existing);
         const snapshot = await this.observe(this.workspace, run);
         validateSnapshot(snapshot, run);
         requireThat(snapshot.diagnostic.location === "intact", "Run identity is not intact; association was not saved.");
         return this.store.change((state) => {
             const batch = check(state);
-            if (batch.run === run) return batch;
+            if (batch.run === run) return publicBatch(batch);
             requireThat(!state.batches.some((other) => other.id !== batch.id && other.run === run
                 && other.stage === batch.stage && ["queued", "running", "blocked"].includes(other.status)),
             "The run already has unfinished conversion work. Resolve the overlap before linking this whole-scope batch.");
@@ -530,7 +634,7 @@ export class Operations {
                 evidence: path.join(run, "run.json") });
             if (!state.runs.includes(run)) state.runs.push(run);
             state.snapshots[run] = snapshot;
-            return batch;
+            return publicBatch(batch);
         });
     }
 
@@ -541,6 +645,7 @@ export class Operations {
         const exportedAt = new Date().toISOString();
         const rows = [];
         const appendEvents = (batch, base) => {
+            batch = publicBatch(batch);
             for (const event of batch.history) {
                 rows.push({ ...base, record_type: "batch_event", name: batch.label, batch_id: batch.id,
                     stage: batch.stage, batch_status: event.status, event_at: event.time, session_id: event.sessionId,

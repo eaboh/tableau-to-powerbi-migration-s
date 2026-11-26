@@ -35,8 +35,13 @@ description: Orchestrates end-to-end migration of a Tableau workbook (.twb/.twbx
 - Owns: dispatch order, barriers, handoff gates, `limitations_encountered` regeneration, closeout report, `check_unit.py`, promotion.
 - Does not own: TMDL/DAX/local AI (`pbi-semantic-builder`, S), PBIR (`pbi-report-builder`, R), independent fidelity sign-off (`pbi-migration-validator`, V), the issued v2 brief and plan/order/destination (the dispatcher), deployment (only by separate explicit agreement).
 - Route every repair, even a one-line one, to its owner.
-- Order: V triages every handover row first (fixable, accepted-limitation, false-claim). Then S, then a verified saved warm cache (`--handoff` exit 0, rows for every commissioned table), then R, then a fresh V. Never run model and report work concurrently on one bundle.
-- Cap fix rounds at 3. An unresolved fidelity gap is reported, never auto-accepted.
+- Normal order: V triages handover rows, then S, verified saved warm cache, R, fresh V.
+  A freshly approved report-only fallback after recorded package and oracle acquisition attempts
+  routes directly to R for the exact existing working report and its already-bound usable model:
+  no S, mandatory V triage or warm-cache entry barrier. Never run model and report work concurrently.
+- After 3 fix rounds, present unresolved findings and ask whether to continue repair, defer with
+  disclosed limitations, or use an eligible report-only fallback. The round count is not a
+  universal halt; no gap is auto-accepted.
 
 ## Inputs
 
@@ -51,7 +56,10 @@ Give each delegate the run, unit, source, working path, brief, handover and refe
 ## Tools and skills
 
 - Task tool only, to dispatch S, R and V. If it is unavailable, report BLOCKED; do not work inline.
-- `scripts\check_reference_readiness.py` is the initial entry gate: check once, before the first triage or builder dispatch, that the current package cohort is START_READY with process exit 0. Resumed Phase-2 work on an edited package does not rerun it; never rehash or repackage to make it pass.
+- `scripts\check_reference_readiness.py` is an initial diagnostic. Normally require START_READY
+  and exit 0; if readiness/evidence is missing, present the exact finding and request per-trigger
+  human continuation rather than treating it as a universal authoring halt. Preserve the non-pass
+  and evidence ceiling. Resumed edited packages are not rehashed/repackaged to manufacture a pass.
 - `live-source-reachability` skill: run it before dispatching builders, through the shipped Power BI artifact.
 - `pbip-model-refresh` skill: owns refresh, persist and warm-cache custody.
 - `t2p check <package>` (read-only layered diagnostics, never COMPLETE), `scripts\check_migration_progress.py --handoff`, `scripts\check_unit.py`, `scripts\promote_unit.py`.
@@ -62,6 +70,17 @@ Give each delegate the run, unit, source, working path, brief, handover and refe
 - Reload Desktop only when `hasUnsavedChanges` is false; a dirty Desktop is a human stop.
 - A toolkit or engine gate defect: stop, route it through the `migration-feedback` skill, ask. Never patch it.
 - Brownfield input: BROWNFIELD DISCOVERY is read-only; compare expected to found before any rework.
+
+For readiness/quality/cache/package/oracle gaps, use the operations canvas
+`request_continuation` then `approve_continuation`, or an equivalent explicit current human
+handoff recording the same run/unit/finding and decision. A new blocker requires new approval.
+Do not override authorization, privacy, unsafe custody, malformed structures or an actual tool
+refusal. Offer manual repair/supported handoff instead. Report-only requires one exact workbook,
+recorded package/oracle attempts, an existing valid working report already bound by supported
+byPath to a separate usable model, and explicit format/style. Missing model/binding: ask to
+supply/repair them; never generate a replacement or silently rebind. Keep the model read-only.
+Static authoring without cache is allowed only where the supported authoring tool permits it;
+no data render/fidelity claim. Approval never authorizes COMPLETE, promotion or deployment.
 
 ## Output and handoff
 

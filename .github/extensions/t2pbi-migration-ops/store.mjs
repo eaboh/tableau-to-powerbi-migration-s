@@ -6,6 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { requireThat, object, text, stages, statuses, isoDate, OpsError, sourceScope, sourceItem } from "./common.mjs";
 import { needsAllocatedRun, validateWorkflow } from "./workflow.mjs";
 import { validatePlanDependencies } from "./model-planning.mjs";
+import { validateContinuations } from "./continuation.mjs";
 
 export const CANVAS_ID = "t2pbi-migration-ops";
 
@@ -106,6 +107,7 @@ function validate(state, workspace) {
         ids.add(batch.id);
     }
     validatePlanDependencies(state.batches);
+    validateContinuations(state.batches);
 }
 
 export class Store {

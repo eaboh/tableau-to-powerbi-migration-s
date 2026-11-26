@@ -292,6 +292,28 @@
                 <label>Evidence reference<input name="evidence" placeholder="Absolute path / gate output / validator sign-off"></label>
                 <label>Progress note<input name="note" required maxlength="2048"></label>
             </div><button class="button" type="submit">Record transition</button></form>
+            <h3>Human continuation decision</h3>
+            <p class="muted">Record the blocker first. Approvals cover its exact history index only, never turn failures into passes. Protected operations require repair, not override. Acquisition attempts are operator-reported and require private evidence.</p>
+            <form id="blocker-form">
+                <label>Owning session<input name="sessionId" required></label>
+                <label>Category<select name="category"><option>readiness</option><option>quality</option><option>cache</option><option>package</option><option>oracle</option><option>authorization</option><option>privacy</option><option>structure</option><option>tool</option><option>filesystem</option></select></label>
+                <label>Acquisition attempted<select name="attempt"><option value="false">No</option><option value="true">Yes, recorded evidence</option></select></label>
+                <label>Non-secret note<input name="note" required maxlength="500"></label>
+                <label>Private evidence reference<input name="evidence" required></label>
+                <button type="submit" class="button secondary">Record blocker</button>
+            </form>
+            <form id="continuation-form">
+                <label>Owning session<input name="sessionId" required></label>
+                <label>Current blocker history index<input name="blockIndex" type="number" min="0" required></label>
+                <label>Decision<select name="mode"><option value="continue">Continue this stage with disclosed gaps</option><option value="report_only">Report-only using existing model</option></select></label>
+                <label>Reason<input name="reason" required maxlength="500"></label>
+                <label>Existing working report (fallback only)<input name="reportPath"></label>
+                <label>Separate existing model (fallback only)<input name="modelPath"></label>
+                <label>Fallback migration style<select name="style"><option value="">Choose</option><option value="faithful">Faithful</option><option value="redesign">Redesign</option></select></label>
+                <label>Fallback output format<select name="format"><option value="">Choose</option><option value="pbip">PBIP</option><option value="pbir">PBIR</option></select></label>
+                <label><input name="confirmed" type="checkbox" required> I approve this exact blocker decision, retaining failures and unverified scope.</label>
+                <button type="submit" class="button">Approve this trigger only</button>
+            </form>
         </section>
     </section>
 

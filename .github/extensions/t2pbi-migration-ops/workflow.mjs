@@ -38,7 +38,7 @@ export function validateWorkflow(batch) {
     requireThat(batch.status !== "finished" || batch.run !== null, "Finished workflow has no allocated run.");
 }
 
-export function workflowDispatch(batch) {
+export function workflowDispatch(batch, approvedContinuation = false) {
     const instructions = [
         "MANUAL HANDOFF ONLY. No process is launched by this canvas. Route to the root dispatcher, not directly to @tableau-migrator.",
         "Claim with update_batch(running) and your real dispatcher session ID before work.",
@@ -79,7 +79,9 @@ export function workflowDispatch(batch) {
             `Numeric comparison commissioned: ${batch.numeric}. Reuse consent; establish remaining intake choices, fidelity, destination and refresh strategy.`,
             "Resolve exact unit/provider identities, providers first. Issue each current v2 private migration-brief.md before packaging.",
             "Only then dispatch @tableau-migrator via the task/subagent tool with exact run, bundle, brief and working paths.",
-            "Require current package-cohort START_READY AND process exit 0 before builders/validator work. Semantic builder owns TMDL/DAX; report builder owns PBIR; validator is read-only.",
+            approvedContinuation
+                ? "Fresh human continuation covers the recorded readiness/quality/cache blocker only. Resume this existing run without manufacturing START_READY; preserve failed diagnostics and unverified scope. Authorization/privacy/custody/structure/tool refusals still prohibit that operation."
+                : "Require current package-cohort START_READY AND process exit 0, or request explicit per-blocker continuation before builders/validator work. Semantic builder owns TMDL/DAX; report builder owns PBIR; validator is read-only.",
             "Independent @pbi-migration-validator comparison of shipped bytes with Tableau and real data, plus the final check, are required. Promote only after sign-off; deployment requires separate explicit agreement.",
         );
     } else {

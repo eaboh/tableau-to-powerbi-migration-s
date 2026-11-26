@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fields, requireThat, text } from "./common.mjs";
+import { publicContinuation } from "./continuation.mjs";
 
 const id = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(value);
 const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
@@ -130,6 +131,7 @@ export function requireProviderProgress(provider) {
 }
 
 export function publicBatch(batch) {
+    batch = publicContinuation(batch);
     if (!batch.modelPlan) return batch;
     return { ...batch, modelPlan: {
         ...batch.modelPlan, models: batch.modelPlan.models.map(({ modelPath, ...model }) => model),

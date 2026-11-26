@@ -369,6 +369,31 @@ $("model-plan-form").addEventListener("submit", (event) => {
         message(`${result.batches.length} model/report handoffs queued, not running. Model mapping remains explicit; host binding checks are still required.`);
     });
 });
+$("blocker-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = Object.fromEntries(new window.FormData(event.currentTarget));
+    work(async () => {
+        if (!selectedBatch) throw new Error("Select the claimed batch first.");
+        const result = await api("request_continuation", { ...input, id: selectedBatch, attempt: input.attempt === "true" });
+        $("continuation-form").elements.blockIndex.value = result.blockIndex;
+        await load();
+        message(`Blocker recorded at history index ${result.blockIndex}; no continuation approved.`);
+    });
+});
+$("continuation-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = Object.fromEntries(new window.FormData(event.currentTarget));
+    work(async () => {
+        if (!selectedBatch) throw new Error("Select the blocked batch first.");
+        if (input.mode === "continue") for (const field of ["reportPath", "modelPath", "style", "format"]) delete input[field];
+        const result = await api("approve_continuation", {
+            ...input, id: selectedBatch, blockIndex: Number(input.blockIndex), confirmed: input.confirmed === "on",
+        });
+        if (result.reportBatch) selectedBatch = result.reportBatch.id;
+        await load();
+        message(result.next);
+    });
+});
 $("source-form").elements.sourceKind.addEventListener("change", () => {
     const project = $("source-form").elements.sourceKind.value === "project";
     $("source-value-label").firstChild.textContent = project ? "Exact project name or LUID" : "Dashboard URL";

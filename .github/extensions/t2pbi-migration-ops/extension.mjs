@@ -15,6 +15,14 @@ const schema = (properties, required = Object.keys(properties)) => ({
     type: "object", properties, required, additionalProperties: false,
 });
 const definitions = [
+    ["request_continuation", "Record a current blocker and operator-reported acquisition attempt with evidence. Preserves failed findings, invalidates earlier approval, starts no work.",
+        schema({ id: string, sessionId: string, category: { enum: ["readiness", "quality", "cache", "package", "oracle", "authorization", "privacy", "structure", "tool", "filesystem"] },
+            attempt: { type: "boolean" }, note: { ...string, maxLength: 500 }, evidence: string })],
+    ["approve_continuation", "Record explicit human approval for this blocker only. Continue retains the same run. Report-only requires recorded package/oracle attempts and an existing working report already bound to a separate existing model; no model creation, automatic rebinding or COMPLETE authority.",
+        schema({ id: string, sessionId: string, blockIndex: { type: "integer", minimum: 0 },
+            mode: { enum: ["continue", "report_only"] }, confirmed: { const: true }, reason: { ...string, maxLength: 500 },
+            reportPath: string, modelPath: string, style: { enum: ["faithful", "redesign"] }, format: { enum: ["pbip", "pbir"] } },
+        ["id", "sessionId", "blockIndex", "mode", "confirmed", "reason"])],
     ["get_model_suggestions", "Read candidate published-provider overlap for exact selected reports. Compatibility is unknown; never confirms or edits a mapping.",
         schema({ run: string, luids: { type: "array", items: string, minItems: 1, maxItems: 100, uniqueItems: true } })],
     ["queue_model_plan", "Queue explicitly confirmed migration style/format and standalone/shared/supplied model mapping. Generated models get one semantic handoff each; report handoffs wait for operator-reported provider progress. No build, rebinding or validation is performed here.",
