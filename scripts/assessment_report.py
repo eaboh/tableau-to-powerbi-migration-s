@@ -262,20 +262,24 @@ def _collector(raw: bytes | None, *, degraded_primary: bool) -> dict[str, Any]: 
 
 def load_evidence(  # pylint: disable=too-many-branches,too-many-locals,too-many-boolean-expressions
     directory: Path | str,
+    *,
+    require_survey: bool = True,
 ) -> dict[str, Any]:
     """Read only fixed evidence paths and return allowlisted, reconciled values."""
     root = Path(directory)
-    survey_raw = _read_bytes(root / INPUTS[0])
+    survey_raw = _read_bytes(root / INPUTS[0], optional=not require_survey)
     assessment_raw = _read_bytes(root / INPUTS[1])
     database_raw = _read_bytes(root / INPUTS[2])
     collector_raw = _read_bytes(root / INPUTS[3], optional=True)
-    try:
-        survey = load_survey(root / INPUTS[0])
-        survey_data = _json_bytes(survey_raw or b"", "survey_unrecognized")
-    except Exception as exc:  # noqa: BLE001 - any producer/schema change is one fixed refusal.
-        del exc
-        raise EvidenceError("survey_unrecognized") from None
-    survey_workbooks = survey_data.get("workbooks") if isinstance(survey_data, dict) else None
+    survey, survey_data = None, None
+    if survey_raw is not None:
+        try:
+            survey = load_survey(root / INPUTS[0])
+            survey_data = _json_bytes(survey_raw, "survey_unrecognized")
+        except Exception as exc:  # noqa: BLE001 - any producer/schema change is one fixed refusal.
+            del exc
+            raise EvidenceError("survey_unrecognized") from None
+    survey_workbooks = survey_data.get("workbooks") if isinstance(survey_data, dict) else []
     if not isinstance(survey_workbooks, list):
         raise EvidenceError("survey_unrecognized")
     survey_luids = []
@@ -550,6 +554,8 @@ def _sections(evidence: dict[str, Any]) -> str:  # pylint: disable=too-many-loca
         + _metric("assessed_at", assessed_at)
         + "</div>"
     )
+    if survey is None:
+        section1 += "<p>Optional engine survey not collected; dependency and lineage evidence remains partial.</p>"
     if degraded:
         section1 += "<p>Incomplete primary listing evidence; unknown values are not zero.</p>"
         section1 += _table(
@@ -671,7 +677,7 @@ def _sections(evidence: dict[str, Any]) -> str:  # pylint: disable=too-many-loca
         (row.get("name"), "platform" if row["luid"] in platform else len(consumers[row["luid"]]), row["luid"])
         for row in sources
     ]
-    lineage_known = not db["run"]["degraded"] and survey.complete
+    lineage_known = not db["run"]["degraded"] and survey is not None and survey.complete
     no_consumers = [row for row in sources if not consumers[row["luid"]] and row["luid"] not in platform]
     lineage_note = (
         f"No-consumer candidates: {', '.join(row['name'] or row['luid'] for row in no_consumers) or 'none'}."
@@ -872,10 +878,11 @@ def main(argv: list[str] | None = None) -> int:
     """Validate all assessment evidence and atomically publish the fixed report path."""
     parser = argparse.ArgumentParser(description="Render validated offline assessment evidence.")
     parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--without-survey", action="store_true", help="disclose an uncollected optional engine survey")
     args = parser.parse_args(argv)
     output = args.run / "assessment-report.html"
     try:
-        evidence = load_evidence(args.run)
+        evidence = load_evidence(args.run, require_survey=not args.without_survey)
         payload = render_html(evidence)
         _publish(output, payload)
     except (EvidenceError, OSError, sqlite3.Error, ValueError):

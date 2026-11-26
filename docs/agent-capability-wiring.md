@@ -12,6 +12,10 @@ These script rules ignore HTML comments but read fenced code, because agents rea
 
 ## Capability registry
 
+Engine-handover, reference-readiness and package-check tokens below describe the
+explicit advanced route. They must remain reachable without becoming simple/v1
+builder prerequisites or advisory-comparison certificates.
+
 | Token | Why it exists | Agent that needs it | Reachable in | Suggested agent-facing wording |
 |---|---|---|---|---|
 | `check_reference_readiness.py` | Issue #421: every other gate here answers whether the work is **done**, so nobody ever asked whether there was enough visual evidence to **start**. An agent that begins with no picture of the Tableau source builds confidently against nothing, and the gap is self-concealing — wherever a capture gap exists, an equivalent fidelity bug is *structurally unfalsifiable*, not merely unverified. | `tableau-migrator` | `docs/INDEX.md` | Run `python scripts/check_reference_readiness.py <bundle>` BEFORE dispatching any builder. Exit 1 (findings) and exit 3 (`CANNOT_ESTABLISH`) are both non-starts: capture the missing references, or record the blind pages in `limitations_encountered` and say plainly that fidelity there cannot be judged. Its per-page grade is the ceiling on any later visual claim — `layout/text only` never supports a fidelity sign-off. |
@@ -30,7 +34,7 @@ appear only where the tier is not obvious. `scripts/README.md` remains the advan
 | Script | Tier | Reason |
 |---|---|---|
 | `scripts/preflight.ps1` | `core` | |
-| `scripts/t2p.py` | `core` | Opt-in pilot (`docs/t2p-pilot-plan.md`); direct calls stay authoritative. |
+| `scripts/t2p.py` | `core` | Default simple start/status facade; explicit advanced commands retain their owners and gates. |
 | `scripts/start_migration.py` | `core` | |
 | `scripts/package_unit.py` | `core` | |
 | `scripts/set_data_folder.py` | `core` | |
@@ -139,10 +143,14 @@ appear only where the tier is not obvious. `scripts/README.md` remains the advan
 | `scripts/path_flavour.py` | `internal` | |
 | `scripts/probe_desktop_credential.ps1` | `internal` | Retired; always refuses. |
 | `scripts/prompt_injection.py` | `internal` | |
+| `scripts/prepare_tableau_source.py` | `internal` | Source selection, private harvest, parse/provenance and dependency preparation; owned by the simple front door, not an agent command. |
 | `scripts/reference_evidence.py` | `internal` | |
+| `scripts/simple_migration.py` | `internal` | Resumable simple/v1 orchestration behind start_migration.py; returns human/task actions and never invokes agents. |
+| `scripts/simple_pbip.py` | `internal` | Read-only connection inspection and exclusive run-owned PBIP intake copies; no authoring or refresh. |
 | `scripts/tableau_capture_policy.py` | `internal` | |
 | `scripts/tableau_env.py` | `internal` | |
 | `scripts/tableau_http.py` | `internal` | |
+| `scripts/tableau_inventory.py` | `internal` | Complete REST/Metadata pagination and exact ambiguity-refusing scope selection for front-door consumers. |
 | `scripts/tableau_oracle_manifest.py` | `internal` | |
 | `scripts/tableau_payload_facts.py` | `internal` | |
 | `scripts/tableau_view_types.py` | `internal` | |

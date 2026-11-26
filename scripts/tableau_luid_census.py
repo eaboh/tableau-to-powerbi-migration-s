@@ -22,7 +22,7 @@ against any site and the census answers, in counts, whether that site would exer
 
 Safety
 ------
-⚠️ **Read-only, and one query.** Sign-in, then exactly one GraphQL request -- made by
+⚠️ **Read-only, and complete inventory.** Sign-in, then follow GraphQL workbook cursor pages -- made by
 ``tableau_view_types.fetch_payload``, the SAME transport hop the shipped parser uses, over the ONE
 hardened ``tableau_http`` round trip -- with no loop and no concurrency. The response body is never
 written to disk and never printed.
@@ -246,7 +246,7 @@ def _session(env_path: Path) -> oracle.TableauSession:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Sign in, ask ONCE, report counts, and name a verdict.
+    """Sign in, read complete workbook cursor pages, report counts, and name a verdict.
 
     Exit 0 means a census was produced -- including the NOT-PRESENT verdict, which is a real answer
     about the site. Exit 2 means CANNOT-TELL: authentication failed, the API did not answer 200, the
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     session = _session(Path(args.env))
-    print("=== blank-luid census (read-only, one query) ===")
+    print("=== blank-luid census (read-only, complete workbook inventory) ===")
     # ⚠️ ONE path for every outcome. Sign-in, the transport hop, the protocol check and the mapping
     # all land on the same `(payload, unavailable)`, so there is no early return that can skip the
     # assessability flag, the JSON, or the exit code. Three such early returns used to exist, and

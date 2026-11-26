@@ -544,10 +544,10 @@ def test_doctor_child_cannot_create_pycache(monkeypatch, tmp_path, capsys):
     "argv",
     [
         ["next"],
-        ["start"],
-        ["start", "--project", " "],
-        ["start", "--proj", "name"],
-        ["start", "--project", "name", "--workbook", "PRIVATE_ARGV_CANARY"],
+        ["start", "--advanced"],
+        ["start", "--advanced", "--project", " "],
+        ["start", "--advanced", "--proj", "name"],
+        ["start", "--advanced", "--project", "name", "--workbook", "PRIVATE_ARGV_CANARY"],
         ["assess", "--project", "name"],
         ["assess", "--storage-decision", "policy.json"],
         ["doctor", "--show-values"],
@@ -613,7 +613,7 @@ def test_start_owner_parity_and_native_stages(monkeypatch, tmp_path, capsys, nat
             {"status": "READY_TO_ATTEMPT", "checks": [], "reason": "presence_only"},
         ),
     )
-    assert t2p.main(["start", "--project", "Finance", "--json"]) == wrapper
+    assert t2p.main(["start", "--advanced", "--project", "Finance", "--json"]) == wrapper
     out, err = _captured(capsys, pipeline)
     result = json.loads(out)
     jsonschema.validate(result, t2p.ENVELOPE_SCHEMA)
@@ -714,7 +714,7 @@ def test_start_preallocation_block_has_no_path(monkeypatch, capsys):
 
     monkeypatch.setattr(start_migration.harvest, "refuse_unignored_output", lambda *a, **k: True)
     monkeypatch.setattr(work_dirs, "allocate_run", lambda *a, **k: pytest.fail("must not allocate"))
-    assert t2p.main(["start", "--project", "Finance", "--json"]) == 1
+    assert t2p.main(["start", "--advanced", "--project", "Finance", "--json"]) == 1
     result, captured = _json(capsys)
     assert result["run_location"] is result["runs_root"] is None
     assert result["run_location_reason"] == "not_allocated_path_withheld"
@@ -742,7 +742,7 @@ def test_native_descriptor_output_is_live_and_json_stdout_single(tmp_path):
         encoding="utf-8",
     )
     with subprocess.Popen(
-        [sys.executable, "-B", str(scripts / "t2p.py"), "start", "--project", "Fixture", "--json"],
+        [sys.executable, "-B", str(scripts / "t2p.py"), "start", "--advanced", "--project", "Fixture", "--json"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -833,7 +833,7 @@ def test_explicit_branch_reaches_owner(monkeypatch, capsys, command):
     monkeypatch.setattr(t2p, "start" if command == "assess" else command, owner)
     arguments = {
         "doctor": [],
-        "start": ["--project", "Fixture"],
+        "start": ["--advanced", "--project", "Fixture"],
         "assess": [],
         "status": ["--run", "relative"],
         "refresh": ["model.pbip"],
@@ -1454,7 +1454,7 @@ def test_start_reaches_existing_postharvest_gate(monkeypatch, tmp_path, capsys, 
         return start_migration.StageResult(name, code, output)
 
     monkeypatch.setattr(start_migration, "_run_child", child)
-    arguments = ["start", "--project", "Finance", *(["--json"] if json_mode else [])]
+    arguments = ["start", "--advanced", "--project", "Finance", *(["--json"] if json_mode else [])]
     if root_kind == "external":
         arguments.extend(["--runs-parent", str(tmp_path / "external")])
     assert t2p.main(arguments) == 1
@@ -2363,7 +2363,7 @@ def test_offline_help_output_journey(monkeypatch, tmp_path, capsys):
     assert t2p.main(["doctor", "--json"]) == 0
     doctor_result, _ = _json(capsys)
     assert doctor_result["status"] == "READY_TO_ATTEMPT"
-    assert t2p.main(["start", "--project", "Finance", "--json"]) == 0
+    assert t2p.main(["start", "--advanced", "--project", "Finance", "--json"]) == 0
     output, progress = _captured(capsys, pipeline)
     started = json.loads(output)
     selected = started["run_location"]["physical_run"]
@@ -2701,7 +2701,7 @@ def test_doctor_details_never_extend_start_or_status(monkeypatch, tmp_path, caps
     pipeline = _Pipeline(monkeypatch, tmp_path, capsys)
     _config(monkeypatch)
     monkeypatch.setattr(t2p, "ROOT", pipeline.root)
-    assert t2p.main(["start", "--project", "Finance", "--json"]) == 0
+    assert t2p.main(["start", "--advanced", "--project", "Finance", "--json"]) == 0
     output, _ = _captured(capsys, pipeline)
     result = json.loads(output)
     assert "doctor_details" not in result

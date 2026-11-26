@@ -134,15 +134,28 @@ class FakeTableau:
         if "metadata/graphql" in url:
             return {
                 "data": {
-                    "workbooks": [{"name": "Sales", "sheets": [{}], "dashboards": [], "embeddedDatasources": []}],
-                    "publishedDatasources": [],
+                    "workbooksConnection": {
+                        "nodes": [
+                            {
+                                "luid": "wb-1",
+                                "name": "Sales",
+                                "sheets": [{}],
+                                "dashboards": [],
+                                "embeddedDatasources": [],
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
                 }
             }
         if "/permissions" in url:
             return {"permissions": {"granteeCapabilities": []}}
         for fragment, collection, item, rows in self._collections():
             if fragment in url:
-                return {"pagination": {"totalAvailable": len(rows)}, collection: {item: rows}}
+                return {
+                    "pagination": {"pageNumber": 1, "pageSize": 1000, "totalAvailable": len(rows)},
+                    collection: {item: rows},
+                }
         return {}
 
     @staticmethod
@@ -304,13 +317,16 @@ def test_paged_returns_the_rows_it_got_plus_the_error_naming_the_page(monkeypatc
             if "/views?" not in url:
                 return super()._payload(url)
             if "pageNumber=1" in url:
-                return {"pagination": {"totalAvailable": 4}, "views": {"view": [{"id": "v-1"}, {"id": "v-2"}]}}
+                return {
+                    "pagination": {"pageNumber": 1, "pageSize": 2, "totalAvailable": 4},
+                    "views": {"view": [{"id": "v-1"}, {"id": "v-2"}]},
+                }
             raise TimeoutError("timed out")
 
     site = _site(Paging(), monkeypatch, max_attempts=1)
     rows, error = site.paged("/sites/site-1/views", "views", "view")
-    assert len(rows) == 2
-    assert error["page"] == 2 and error["transport"] is True
+    assert rows == []
+    assert "pageNumber=2" in error["path"] and error["transport"] is True
     assert no_sleep == []
 
 
@@ -724,7 +740,7 @@ def test_a_mid_run_abort_removes_previous_final_artifacts(monkeypatch, no_sleep,
     monkeypatch.setattr(assess_estate, "resolve_env", lambda *_a, **_k: dict(ENV))
     monkeypatch.setattr(assess_estate, "env_source", lambda *_a, **_k: "test")
 
-    def aborting_collect(_site, _survey, checkpoint=None):
+    def aborting_collect(_site, _survey, checkpoint=None, **_scope):
         if checkpoint:
             checkpoint(
                 {
@@ -836,7 +852,7 @@ def test_a_graphql_200_error_body_is_scrubbed_before_it_is_recorded(monkeypatch,
     assert errors and errors[0]["listing"] == "structure"
     recorded = errors[0]["error"]
     assert ENV["TABLEAU_PAT_SECRET"] not in recorded
-    assert "[REDACTED]" in recorded
+    assert recorded == "metadata api returned 1 graphql error(s); response refused"
     assert no_sleep == []
 
 
@@ -866,7 +882,7 @@ def test_a_graphql_error_body_never_reaches_estate_db(monkeypatch, no_sleep, tmp
     the existing secret test covered neither of (it used the HTTPError body and read only JSON/md)."""
     code = _run_main(monkeypatch, tmp_path, _GraphqlLeak())
     out = tmp_path / "_assessment"
-    assert code == 0  # workbooks were still returned, so the structure error is SECONDARY
+    assert code == 3  # Errors beside data refuse the entire structure answer.
     # Pin the DISCRIMINATING row (1, 0). The other two DB tests only cover (1, 1) and (0, 0), so
     # transposing the two columns - or writing `degraded` from `degraded_primary` - passed the whole
     # suite while claiming a secondary-degraded run was clean. The primary/secondary split is the
@@ -876,9 +892,10 @@ def test_a_graphql_error_body_never_reaches_estate_db(monkeypatch, no_sleep, tmp
         .execute("SELECT degraded, degraded_primary FROM assessment_run")
         .fetchone()
     )
-    assert marker == (1, 0)
+    assert marker == (1, 1)
     assert ENV["TABLEAU_PAT_SECRET"].encode() not in (out / "estate.db").read_bytes()
     errs = assess_estate.sqlite3.connect(out / "estate.db").execute("SELECT error FROM listing_error").fetchall()
     assert errs and all(ENV["TABLEAU_PAT_SECRET"] not in row[0] for row in errs)
-    assert any("[REDACTED]" in row[0] for row in errs)
+    assert all("upstream rejected" not in row[0] for row in errs)
+    assert any(row[0] == "metadata api returned 1 graphql error(s); response refused" for row in errs)
     assert no_sleep == []

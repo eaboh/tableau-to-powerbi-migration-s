@@ -40,6 +40,7 @@ import tableau_oracle_manifest as verdict  # noqa: E402  # pylint: disable=wrong
 import tableau_view_types as view_types_mod  # noqa: E402  # pylint: disable=wrong-import-position
 import tableau_payload_facts as payload_facts  # noqa: E402  # pylint: disable=wrong-import-position
 from mocks import estate  # noqa: E402  # pylint: disable=wrong-import-position
+from tableau_inventory_fixtures import connection_body
 
 FEDERATED_401 = (
     "<?xml version='1.0'?><tsResponse><error code='401002'><summary>Unauthorized Access</summary></error></tsResponse>"
@@ -77,6 +78,8 @@ class FakeSession(oracle.TableauSession):
         self.calls.append(path)
         status, payload, headers = self.responses.pop(0)
         payload = payload.encode() if isinstance(payload, str) else payload
+        if api == "metadata":
+            payload = connection_body(payload)
         headers = dict(headers)
         if status == 200 and "Content-Length" not in headers and "Transfer-Encoding" not in headers:
             headers["Content-Length"] = str(len(payload))
@@ -561,7 +564,8 @@ def test_select_views_filters_by_exact_workbook_luid(monkeypatch):
                         {"id": wanted, "name": "Duplicate caption"},
                         {"id": other, "name": "Duplicate caption"},
                     ]
-                }
+                },
+                "pagination": {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 2},
             }
 
     monkeypatch.setattr(oracle, "list_views", lambda _session: views)
@@ -578,7 +582,10 @@ def test_select_views_refuses_unknown_luid_without_caption_fallback(monkeypatch)
 
         @staticmethod
         def get_json(_path):
-            return {"workbooks": {"workbook": [{"id": "known", "name": "Requested Caption"}]}}
+            return {
+                "workbooks": {"workbook": [{"id": "known", "name": "Requested Caption"}]},
+                "pagination": {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 1},
+            }
 
     monkeypatch.setattr(oracle, "list_views", lambda _session: [{"id": "view", "workbook": {"id": "known"}}])
 
@@ -589,23 +596,23 @@ def test_select_views_refuses_unknown_luid_without_caption_fallback(monkeypatch)
 def test_select_views_finds_later_page_workbook_and_views_before_applying_limit():
     calls = []
     pages = {
-        "/views?pageSize=1000": {
+        "/views?pageSize=1000&pageNumber=1": {
             "views": {"view": [{"id": "other-view", "workbook": {"id": "other"}}]},
             "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "3"},
         },
-        "/views?pageSize=1000&pageNumber=2": {
+        "/views?pageSize=1&pageNumber=2": {
             "views": {"view": [{"id": "target-first", "workbook": {"id": "target"}}]},
             "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "3"},
         },
-        "/views?pageSize=1000&pageNumber=3": {
+        "/views?pageSize=1&pageNumber=3": {
             "views": {"view": [{"id": "target-second", "workbook": {"id": "target"}}]},
             "pagination": {"pageNumber": "3", "pageSize": "1", "totalAvailable": "3"},
         },
-        "/workbooks?pageSize=1000": {
+        "/workbooks?pageSize=1000&pageNumber=1": {
             "workbooks": {"workbook": [{"id": "other", "name": "Duplicate caption"}]},
             "pagination": {"pageNumber": "1", "pageSize": "1", "totalAvailable": "2"},
         },
-        "/workbooks?pageSize=1000&pageNumber=2": {
+        "/workbooks?pageSize=1&pageNumber=2": {
             "workbooks": {"workbook": [{"id": "target", "name": "Duplicate caption"}]},
             "pagination": {"pageNumber": "2", "pageSize": "1", "totalAvailable": "2"},
         },
@@ -620,7 +627,7 @@ def test_select_views_finds_later_page_workbook_and_views_before_applying_limit(
             calls.append(suffix)
             return pages[suffix]
 
-    selected, names = oracle.select_views(Session(), ["Duplicate caption"], 1, ["target"])
+    selected, names = oracle.select_views(Session(), None, 1, ["target"])
 
     assert [view["id"] for view in selected] == ["target-first"]
     assert names == {"other": "Duplicate caption", "target": "Duplicate caption"}

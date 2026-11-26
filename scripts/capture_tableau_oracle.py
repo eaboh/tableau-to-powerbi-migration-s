@@ -251,6 +251,8 @@ from tableau_http import (  # noqa: E402  # pylint: disable=wrong-import-positio
     response_framing,
 )
 
+from tableau_inventory import list_inventory, select_workbook  # noqa: E402  # pylint: disable=wrong-import-position
+
 LOG = logging.getLogger("tableau-oracle")
 
 # A Tableau LUID is a UUID. Checkable in full, so a value matching it is provably not a credential --
@@ -871,46 +873,7 @@ class TableauSession:  # pylint: disable=too-many-instance-attributes
 
 def _list_inventory(session: TableauSession, collection: str, item: str) -> list[dict[str, Any]]:
     """Read a complete REST inventory; never return a failed or inconsistent page prefix."""
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    expected: tuple[int, int] | None = None
-    page = 1
-    while True:
-        path = f"/sites/{session.site_id}/{collection}?pageSize=1000"
-        if page > 1:
-            path += f"&pageNumber={page}"
-        payload = session.get_json(path)
-        rows = (payload.get(collection) or {}).get(item, [])
-        if not isinstance(rows, list) or any(
-            not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows
-        ):
-            raise ValueError("invalid inventory pagination rows")
-        if "pagination" not in payload and page == 1 and len(rows) < 1000:
-            return rows
-        pagination = payload.get("pagination")
-        if not isinstance(pagination, dict) or any(
-            not re.fullmatch(r"[0-9]+", str(pagination.get(key, "")))
-            for key in ("pageNumber", "pageSize", "totalAvailable")
-        ):
-            raise ValueError("invalid inventory pagination metadata")
-        counts = {key: int(pagination[key]) for key in ("pageNumber", "pageSize", "totalAvailable")}
-        if expected is None:
-            expected = (counts["totalAvailable"], counts["pageSize"])
-        if (
-            counts["pageNumber"] != page
-            or counts["pageSize"] <= 0
-            or (counts["totalAvailable"], counts["pageSize"]) != expected
-            or len(rows) != min(counts["pageSize"], max(0, counts["totalAvailable"] - len(out)))
-        ):
-            raise ValueError("inconsistent inventory pagination")
-        ids = {row["id"] for row in rows}
-        if len(ids) != len(rows) or seen.intersection(ids):
-            raise ValueError("repeated identities in inventory pagination")
-        seen.update(ids)
-        out.extend(rows)
-        if len(out) == counts["totalAvailable"]:
-            return out
-        page += 1
+    return list_inventory(session, collection, item)
 
 
 def list_views(session: TableauSession) -> list[dict[str, Any]]:
@@ -1782,16 +1745,18 @@ def select_views(
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Resolve the views to capture, plus a workbook-LUID -> name index for the manifest."""
     views = list_views(session)
-    names = {wb["id"]: wb["name"] for wb in _list_inventory(session, "workbooks", "workbook")}
+    inventory = _list_inventory(session, "workbooks", "workbook")
+    names = {wb["id"]: wb["name"] for wb in inventory}
     if workbook_ids:
-        missing = [luid for luid in dict.fromkeys(workbook_ids) if luid not in names]
+        normalized = {luid.casefold(): luid for luid in names}
+        missing = [luid for luid in dict.fromkeys(workbook_ids) if luid.casefold() not in normalized]
         if missing:
             raise ValueError("unknown --workbook-id LUID(s); refusing caption fallback")
-        wanted_ids = set(workbook_ids)
+        wanted_ids = {normalized[luid.casefold()] for luid in workbook_ids}
         views = [v for v in views if (v.get("workbook") or {}).get("id") in wanted_ids]
     if workbooks:
-        wanted = {w.lower() for w in workbooks}
-        views = [v for v in views if names.get((v.get("workbook") or {}).get("id"), "").lower() in wanted]
+        wanted_ids = {select_workbook(inventory, token)["id"] for token in workbooks}
+        views = [v for v in views if (v.get("workbook") or {}).get("id") in wanted_ids]
     if limit:
         views = views[:limit]
     return views, names

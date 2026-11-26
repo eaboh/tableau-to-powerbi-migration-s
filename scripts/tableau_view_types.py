@@ -44,6 +44,8 @@ import json
 import re
 from typing import Any
 
+from tableau_inventory import MetadataError, collect_metadata_workbooks
+
 # The same closed allowlist `capture_tableau_oracle.artifact_stem` uses for filenames, for the same
 # reason: a value that has been PROVED to be a UUID cannot carry a credential, so it needs no
 # redaction downstream. Validating here means the mapping's keys are shape-verified rather than
@@ -69,7 +71,9 @@ def is_luid(value: str) -> bool:
 # capability question rather than a bug. Only the SHAPE of the resulting GraphQL error is reported --
 # never its message, which is server-controlled (see `view_types`).
 VIEW_TYPE_QUERY = """
-{ workbooks { dashboards { luid } sheets { luid } } }
+{ workbooksConnection(first: 1000) {
+  nodes { luid dashboards { luid } sheets { luid } }
+  pageInfo { hasNextPage endCursor } } }
 """
 
 # An upper bound on the body we will decode and parse, not a statement about Tableau. The query asks
@@ -89,7 +93,7 @@ UNKNOWN = "unknown"
 VIEW_TYPE_KEY = "__view_type"
 
 
-def view_types(session: Any) -> tuple[dict[str, str], str | None]:
+def view_types(session: Any, workbook_luids: list[str] | None = None) -> tuple[dict[str, str], str | None]:
     """Map view LUID -> ``dashboard``/``worksheet``. Returns ``(mapping, unavailable_reason)``.
 
     The request goes through the session's own ``_request`` with ``api="metadata"``, which composes
@@ -109,7 +113,7 @@ def view_types(session: Any) -> tuple[dict[str, str], str | None]:
     their valid siblings, which produced a mapping that typed some views and silently left others
     ``unknown`` -- indistinguishable, downstream, from a run where those views genuinely had no type.
     """
-    payload, refused = fetch_payload(session)
+    payload, refused = fetch_payload(session, workbook_luids)
     if refused:
         return {}, refused
     return parse_payload(payload)
@@ -139,8 +143,8 @@ def parse_payload(payload: Any) -> tuple[dict[str, str], str | None]:
     return _mapping_from(payload)
 
 
-def fetch_payload(session: Any) -> tuple[Any, str | None]:
-    """One round trip, decoded. Returns ``(payload, refusal_reason)``.
+def fetch_payload(session: Any, workbook_luids: list[str] | None = None) -> tuple[Any, str | None]:
+    """Complete cursor inventory, decoded. Returns ``(payload, refusal_reason)``.
 
     ⚠️ **Public because a second caller needs exactly this, and re-implementing it is the defect.**
     ``tableau_luid_census`` holds the decoded payload for its counts, so it cannot simply call
@@ -178,9 +182,26 @@ def fetch_payload(session: Any) -> tuple[Any, str | None]:
     U+FFFD and carried on, so a body that was not valid UTF-8 still produced a trusted mapping --
     measured as a fail-open. A response we cannot read exactly is a response we do not have.
     """
+
+    def fetch(query: str) -> dict:
+        payload, refusal = _fetch_query(session, query)
+        if refusal:
+            raise MetadataError(refusal)
+        return payload
+
+    try:
+        workbooks = collect_metadata_workbooks(
+            fetch, "dashboards { luid } sheets { luid }", workbook_luids=workbook_luids
+        )
+        return {"data": {"workbooks": workbooks}}, None
+    except MetadataError as exc:
+        return {}, str(exc)
+
+
+def _fetch_query(session: Any, query: str) -> tuple[Any, str | None]:
     try:
         status, body, _ = session._request(  # pylint: disable=protected-access
-            "POST", "/graphql", body={"query": VIEW_TYPE_QUERY}, api="metadata"
+            "POST", "/graphql", body={"query": query}, api="metadata"
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return {}, f"metadata api call failed: {type(exc).__name__}"
@@ -351,7 +372,9 @@ def resolve_and_stamp(session: Any, views: list[dict[str, Any]], log: Any) -> st
     than returned for the caller to remember to check, which is how a "cannot establish" quietly
     becomes an unexamined variable. Returns the reason anyway, for a caller that wants to record it.
     """
-    mapping, unavailable = view_types(session)
+    workbook_luids = {(view.get("workbook") or {}).get("id") for view in views}
+    scoped = sorted(workbook_luids) if workbook_luids and None not in workbook_luids else None
+    mapping, unavailable = view_types(session, scoped)
     if unavailable:
         log.warning(
             "view type is UNKNOWN for every view in this run (%s). A consumer cannot tell a dashboard "

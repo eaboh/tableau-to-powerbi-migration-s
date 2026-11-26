@@ -334,6 +334,19 @@ def _parser_assertions(payload: bytes) -> None:
     assert "INCOMPLETE" not in text
 
 
+def test_simple_assessment_reports_missing_optional_survey_without_inventing_it(tmp_path: Path) -> None:
+    root = _write_full(tmp_path)
+    (root / "estate_survey.json").unlink()
+    assert report.main(["--run", str(root)]) == 1
+    assert report.main(["--run", str(root), "--without-survey"]) == 0
+    evidence = report.load_evidence(root, require_survey=False)
+    assert evidence["survey"] is None
+    assert evidence["survey_data"] is None
+    assert not (root / "estate_survey.json").exists()
+    payload = (root / "assessment-report.html").read_text(encoding="utf-8")
+    assert "Optional engine survey not collected" in payload
+
+
 def test_full_evidence_html_is_deterministic_and_matches_expected(tmp_path: Path) -> None:
     root = _write_full(tmp_path / "assessment", collector=_collector())
     assert report.main(["--run", str(root)]) == 0

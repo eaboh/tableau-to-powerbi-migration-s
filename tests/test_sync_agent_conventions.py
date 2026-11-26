@@ -411,20 +411,20 @@ ROOT_CONTRACTS: dict[str, tuple[Path, tuple[str, ...]]] = {
     "migration-brief-path": (
         AGENTS_MD,
         (
-            "**Issue each unit's current v2 brief before packaging**",
-            r"`<absolute-run>\assessment\briefs\<exact-unit>\migration-brief.md`",
-            "The front door creates no brief draft or `dispatch.md`.",
+            "**Prepare sources, not an engine bundle.**",
+            r"`<absolute-run>\assessment\briefs\<unit-id>\migration-brief.md`",
+            "Private `simple-brief/v1` briefs are emitted",
         ),
     ),
     "five-intake-decisions": (
         AGENTS_MD,
         (
-            "**Ask once**, reusing answers: plan/order/destination",
+            "**Ask once and persist choices**",
             "autonomy (`standard`)",
-            "fidelity bar including explicit numeric comparison `none|required`",
-            "Numeric scope has **no default**",
+            "numeric comparison `none|required` (`--numeric`) have **no inferred defaults**",
+            "single versus batch (`--mode`), modernization versus 1:1",
             "stop-or-degrade policy",
-            "refresh strategy (`uia` default or `operator` human handoff only)",
+            "refresh strategy (`uia`, or `operator` human handoff)",
         ),
     ),
     "credential-stop-outranks-autonomy": (
@@ -641,8 +641,8 @@ def test_the_project_targets_bind_before_the_hard_cap() -> None:
     assert PERSONA_SIZE_TARGET < sac.PROMPT_CHAR_LIMIT
 
 
-DISPATCH_LINE = "4. **Dispatch `@tableau-migrator` per unit via the task/subagent tool**, providers first."
-FIDELITY_LINE = "5. **Done includes independent fidelity comparison against Tableau** on the shipped working tree:"
+DISPATCH_LINE = "4. **Dispatch returned task actions through the task tool**"
+FIDELITY_LINE = "5. **Compare independently after authoring** through `@pbi-migration-validator`"
 NO_PATCH_BULLET = (
     "- **Customer migration:** never silently patch toolkit/engine to clear a gate; stop, explain, "
     "route and ask; run patched code only with explicit human approval; mark every result `patched` "
@@ -654,8 +654,8 @@ def test_the_opening_orders_front_door_intake_brief_dispatch_and_comparison() ->
     text = _normalized(AGENTS_MD).split("<!-- BEGIN:shared-conventions -->", 1)[0]
     steps = (
         r"1. **Start** `python scripts\start_migration.py`",
-        "2. **Ask once**",
-        "3. **Issue each unit's current v2 brief before packaging**",
+        "2. **Ask once and persist choices**",
+        "3. **Prepare sources, not an engine bundle.**",
         DISPATCH_LINE,
         FIDELITY_LINE,
     )
@@ -666,15 +666,17 @@ def test_the_opening_orders_front_door_intake_brief_dispatch_and_comparison() ->
 def test_the_root_requires_task_dispatch_not_inline_substitution() -> None:
     text = _normalized(AGENTS_MD)
     assert DISPATCH_LINE in text, "task-tool tableau-migrator dispatch line missing"
-    assert "Unavailable dispatch is a blocker, not permission to work inline." in text
-    assert "current package-cohort **START_READY + process exit 0** before any builder/validator work" in text
+    assert "Missing tools permit an explicit manual handoff, not inline replacement" in text
+    assert "No conversion, bundle, package START_READY or COMPLETE is required on this route." in text
+    assert "current cohort START_READY / 0" in text, "advanced authority must remain truthful"
 
 
 def test_the_root_requires_independent_tableau_comparison_before_done() -> None:
     text = _normalized(AGENTS_MD)
     assert FIDELITY_LINE in text, "independent Tableau fidelity line missing"
-    assert "Require `@pbi-migration-validator` sign-off" in text
-    assert "Desktop with data; labels/layout/interactions and commissioned values, within evidence ceilings." in text
+    assert "This comparison is advisory" in text
+    assert "humans may explicitly accept them or skip comparison" in text
+    assert "A human decision is never validation or COMPLETE." in text
 
 
 def test_the_shared_customer_rule_requires_approval_and_patched_disclosure() -> None:

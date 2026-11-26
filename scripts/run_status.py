@@ -1187,6 +1187,12 @@ def build_status(run: Path | str) -> tuple[dict[str, Any], int]:  # pylint: disa
         status["next_action"] = _next_action(False, "unestablished", [], [], [], findings=findings)
         return status, 1
 
+    if manifest.get("route") == "simple/v1":
+        from simple_migration import status_observations  # pylint: disable=import-outside-toplevel
+
+        status.update(status_observations(path, manifest))
+        return status, 0
+
     status["run_recorded_status"] = (
         _display_known(manifest["status"], {"active"}, findings, "run.json") if "status" in manifest else "not_recorded"
     )

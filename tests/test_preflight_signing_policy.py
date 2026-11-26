@@ -17,7 +17,7 @@ ORIGINS = {
     "AGENTS.md": (("-Update", "-CheckUpstream"),),
     ".github/copilot-instructions.md": (("-Update", "-CheckUpstream"),),
     "docs/operator-runbook.md": (("-Update", "-CheckUpstream"), ()),
-    "docs/start-with-one-workbook.md": (("-Update",),),
+    "docs/start-with-one-workbook.md": (("-Update", "-CheckUpstream"),),
     "scripts/README.md": (("-Update", "-CheckUpstream"),),
     ".github/agents/tableau-migrator.agent.md": ((),),
     ".github/agents/dry-run-operator.agent.md": ((),),
