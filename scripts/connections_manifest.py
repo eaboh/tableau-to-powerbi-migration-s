@@ -41,9 +41,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from migration_bundle import load_bundle  # noqa: E402  # pylint: disable=wrong-import-position
 from preflight_source_credentials import classify_source  # noqa: E402  # pylint: disable=wrong-import-position
+import connection_remapping as remap  # noqa: E402  # pylint: disable=wrong-import-position
 
 LOG = logging.getLogger("connections_manifest")
 DEFAULT_OUT = REPO_ROOT / "_connections_manifest"
@@ -472,6 +475,7 @@ def build(bundle_path: Path) -> dict[str, Any]:
         # invisible to a key built from the projection, which would merge two genuinely different
         # systems into one job and hide the second.
         key, entry = _manifest_entry(source, radius, source_identities_by_name)
+        entry["source_key"] = remap.source_key(entry)
         if key in seen:
             _merge_duplicate_entry(seen[key], entry)
             continue
@@ -603,20 +607,69 @@ def main(argv: list[str] | None = None) -> int:
         help=f"write connections.md / connections.json here; must be git-ignored (default: {DEFAULT_OUT})",
     )
     parser.add_argument("--format", choices=("md", "json", "both"), default="both", help="what to emit")
+    parser.add_argument("--target-map", type=Path, help="explicitly confirmed structured connection-targets/1 sample")
+    parser.add_argument("--model", type=Path, help="exact working TMDL model for static approved-target comparison")
+    parser.add_argument(
+        "--check-targets", action="store_true", help="compare complete target M; never data/source fidelity"
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     manifest = build(args.bundle)
+    if (args.model or args.check_targets) and not (args.target_map and args.model and args.check_targets):
+        parser.error("--check-targets requires --target-map and --model together")
+    if args.target_map:
+        try:
+            manifest["approved_targets"] = remap.approve(manifest, remap.read_sample(args.target_map))
+            if args.check_targets:
+                manifest["target_check"] = remap.check_targets(args.bundle, args.model, manifest["approved_targets"])
+        except (ValueError, OSError) as exc:
+            LOG.error(
+                "Connection target input refused: %s",
+                exc if isinstance(exc, ValueError) else "private input unavailable",
+            )
+            return 3
 
     output_checks = _output_checks(args.out)
     if any(refuse_unignored_output(out, anchor=anchor) for out, anchor in output_checks):
         return 2
-    args.out = args.out.expanduser().resolve()
+    if args.target_map:
+        lexical = args.out.expanduser().absolute()
+        if any(part.is_symlink() for part in (lexical, *lexical.parents)):
+            LOG.error("Linked target output is not supported.")
+            return 3
+        args.out = lexical.resolve()
+        source = args.bundle.resolve()
+        source = source if source.is_dir() else source.parent
+        if args.out.is_relative_to(source) or (args.model and args.out.is_relative_to(args.model.resolve())):
+            LOG.error("Target receipts must be outside the source bundle and working model.")
+            return 3
+    else:
+        args.out = args.out.expanduser().resolve()
     args.out.mkdir(parents=True, exist_ok=True)
-    if args.format in ("md", "both"):
+    if args.format in ("md", "both") and not args.target_map:
         (args.out / "connections.md").write_text(render(manifest), encoding="utf-8")
-    if args.format in ("json", "both"):
-        (args.out / "connections.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    if args.format in ("json", "both") or args.target_map:
+        content = json.dumps(manifest, indent=2) + "\n"
+        destination = args.out / "connections.json"
+        if args.target_map:
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=args.out, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.link(temporary, destination)
+            except FileExistsError:
+                if destination.is_symlink() or destination.read_text(encoding="utf-8") != content:
+                    LOG.error("Existing target receipt differs; select a new private output directory.")
+                    return 3
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        else:
+            destination.write_text(content, encoding="utf-8")
     LOG.info(
         "%d source(s): %d need a connection, %d snapshot(s), %d to review -> %s",
         manifest["total"],
@@ -625,7 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest["needs_review"],
         args.out,
     )
-    return 0
+    return {"MISMATCH": 1, "NOT_CHECKED": 3}.get(manifest.get("target_check", {}).get("status"), 0)
 
 
 if __name__ == "__main__":

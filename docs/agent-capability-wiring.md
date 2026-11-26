@@ -119,6 +119,7 @@ appear only where the tier is not obvious. `scripts/README.md` remains the advan
 | `scripts/assessment_report.py` | `internal` | Invoked only as the fourth child of the assessment-only front door. |
 | `scripts/bundle_corpus.py` | `internal` | |
 | `scripts/connection_target.py` | `internal` | |
+| `scripts/connection_remapping.py` | `internal` | Inert target template import and static working-partition comparison through connections_manifest. |
 | `scripts/copilot_home.py` | `internal` | Shared path-only library for toolkit consumers. |
 | `scripts/current_artifact_revision.py` | `internal` | |
 | `scripts/engine_input_staging.py` | `internal` | Imported by `run_estate.py`; deleted at #836 S4. |

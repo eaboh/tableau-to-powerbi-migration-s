@@ -18,8 +18,145 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import connections_manifest as cm  # noqa: E402  # pylint: disable=wrong-import-position
+import connection_remapping as remap  # noqa: E402  # pylint: disable=wrong-import-position
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _target_sample(tmp_path):
+    spec = _spec([{"name": "S", "connection": {"class": "snowflake", "server": "original.example"}}], tmp_path)
+    sample = {
+        "schema": "connection-targets/1",
+        "confirmed": True,
+        "mappings": [
+            {
+                "sourceKey": cm.build(spec)["connections"][0]["source_key"],
+                "confirmed": True,
+                "target": {
+                    "class": "databricks",
+                    "server": "target.example",
+                    "httpPath": "/sql/1.0/warehouses/warehouse",
+                    "database": "catalog",
+                    "schema": "new_schema",
+                },
+                "bindings": [{"table": "Orders", "partition": "Orders", "targetTable": "orders"}],
+            }
+        ],
+    }
+    path = tmp_path / "sample.json"
+    path.write_text(json.dumps(sample), encoding="utf-8")
+    return spec, path, sample
+
+
+def test_target_import_preserves_source_and_is_immutable(tmp_path):
+    spec, sample_path, sample = _target_sample(tmp_path)
+    before = spec.read_bytes()
+    out = tmp_path / "receipt"
+    # Private output must not be inside the bundle: place it beside a dedicated bundle.
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    relocated = bundle / spec.name
+    spec.rename(relocated)
+    command = ["--bundle", str(relocated), "--target-map", str(sample_path), "--out", str(out)]
+    assert cm.main(command) == 0
+    receipt = json.loads((out / "connections.json").read_text())
+    mapping = receipt["approved_targets"]["mappings"][0]
+    assert mapping["platform_changed"] is True
+    assert mapping["attribution_unverified"] is True
+    assert "Databricks.Catalogs" in mapping["bindings"][0]["expression"]
+    assert receipt["connections"][0]["connection"]["server"] == "original.example"
+    assert relocated.read_bytes() == before
+    retained = (out / "connections.json").read_bytes()
+    assert cm.main(command) == 0
+    sample["mappings"][0]["target"]["schema"] = "another_schema"
+    sample_path.write_text(json.dumps(sample))
+    assert cm.main(command) == 3
+    assert (out / "connections.json").read_bytes() == retained
+
+
+@pytest.mark.parametrize("change", ["secret", "userinfo", "missing", "duplicate", "unknown", "unconfirmed"])
+def test_target_sample_rejects_unsafe_or_ambiguous_input(tmp_path, change):
+    spec, _, sample = _target_sample(tmp_path)
+    mapping = sample["mappings"][0]
+    if change == "secret":
+        mapping["target"]["token"] = "should-not-copy"
+    elif change == "userinfo":
+        mapping["target"]["server"] = "https://user:should-not-copy@host"
+    elif change == "missing":
+        sample["mappings"] = []
+    elif change == "duplicate":
+        sample["mappings"].append(mapping)
+    elif change == "unknown":
+        mapping["sourceKey"] = "v1:unknown"
+    else:
+        mapping["confirmed"] = False
+    with pytest.raises(ValueError) as error:
+        remap.approve(cm.build(spec), sample)
+    assert "should-not-copy" not in str(error.value)
+
+
+def test_target_comparison_requires_complete_live_target_partition(tmp_path):
+    spec, _, sample = _target_sample(tmp_path)
+    approved = remap.approve(cm.build(spec), sample)
+    model = tmp_path / "pbip" / "Target.SemanticModel"
+    tables = model / "definition" / "tables"
+    tables.mkdir(parents=True)
+    expression = approved["mappings"][0]["bindings"][0]["expression"]
+    table = tables / "Orders.tmdl"
+
+    def write(value):
+        table.write_text(
+            "table Orders\n\tpartition Orders = m\n\t\tmode: import\n\t\tsource =\n"
+            + "\n".join("\t\t\t" + line for line in value.splitlines())
+            + "\n",
+            encoding="utf-8",
+        )
+
+    write(expression)
+    result = remap.check_targets(spec, model, approved)
+    assert result["status"] == "TEXT_MATCHED"
+    assert result["source_semantics"] == "UNVERIFIED"
+    table.write_text(table.read_text().replace("table Orders", "table Returns"))
+    assert remap.check_targets(spec, model, approved)["status"] == "NOT_CHECKED"
+    write(expression)
+    valid = table.read_text()
+    for invalid in (
+        valid.replace("\tpartition", "partition"),
+        valid.replace("\tpartition", "\tcolumn X\n\t\tpartition"),
+        valid.replace("\tpartition", "\ttable Returns\n\t\tpartition"),
+        valid.replace("partition Orders =", "partition 'Orders''' ="),
+    ):
+        table.write_text(invalid)
+        assert remap.check_targets(spec, model, approved)["status"] != "TEXT_MATCHED"
+    write(expression)
+    outside = tmp_path / "supplied.tmdl"
+    table.rename(outside)
+    os.link(outside, table)
+    with pytest.raises(ValueError, match="independent"):
+        remap.check_targets(spec, model, approved)
+    table.unlink()
+    write(expression.replace("target.example", "wrong.example"))
+    assert remap.check_targets(spec, model, approved)["status"] == "MISMATCH"
+    write('let\n    Note = "' + expression.replace('"', '""') + '"\nin\n    #table({}, {})')
+    assert remap.check_targets(spec, model, approved)["status"] == "MISMATCH"
+    table.unlink()
+    assert remap.check_targets(spec, model, approved)["status"] == "NOT_CHECKED"
+    with pytest.raises(ValueError):
+        remap.check_targets(spec, tmp_path, approved)
+
+
+def test_target_sample_duplicate_json_and_linked_components_refused(tmp_path):
+    sample = tmp_path / "sample.json"
+    sample.write_text('{"schema":"connection-targets/1","confirmed":true,"confirmed":true}')
+    with pytest.raises(ValueError, match="duplicate"):
+        remap.read_sample(sample)
+    link = tmp_path / "alias"
+    try:
+        link.symlink_to(tmp_path, target_is_directory=True)
+    except OSError:
+        pytest.skip("Host does not permit symlinks")
+    with pytest.raises(ValueError, match="Linked"):
+        remap.read_sample(link / "sample.json")
 
 
 def _spec(sources: list[dict], tmp_path: Path) -> Path:

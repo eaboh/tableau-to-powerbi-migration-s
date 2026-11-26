@@ -41,6 +41,19 @@ description: Finishes the Fabric Power BI semantic model (TMDL) that the determi
 
 Require the issued v2 brief; the exact run, unit, source and existing `.SemanticModel` and working paths; the bundle handover or `migration-spec.json`; reference identities and grades. Missing authority returns to the orchestrator; never invent a spec, path or field.
 
+Ask whether original endpoints should be retained or an approved connection sample should be
+followed before connection work. Structured `connection-targets/1` samples are imported through
+`connections_manifest.py --target-map <private-sample>` (operator runbook). Read its private
+`approved_targets` receipt, reconcile every source key against the current manifest, and apply
+the confirmed canonical-navigation templates only to the handed working model through the
+existing authoring skill. Preserve pristine source hashes and source-vs-cache classification.
+Do not execute sample M or copy credentials. A connector-platform change requires explicit
+SQL/navigation/type/security and report-field reconciliation; unresolved changes remain
+semantic tasks, not automatic SQL translation. `--check-targets --model <working-model>`
+compares target text only: `TEXT_MATCHED` is not refresh, source attribution or fidelity.
+Keep independent original-source and target checks/disclosures; an approved difference must
+not be rewritten as original fidelity. Declare bundle edits normally; never edit a supplied model.
+
 ## Tools and skills
 
 Reuse the tools below before building your own. Your own code is the last resort; disclose it as a toolkit gap, and never patch the toolkit or engine. A refusal, gate or dialog is not a missing capability: never code around it, call the Desktop bridge directly, or switch routes.

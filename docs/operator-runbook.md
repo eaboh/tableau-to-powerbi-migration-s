@@ -1,5 +1,50 @@
 # Operator runbook — migrating a Tableau estate into Fabric
 
+## Approved target connection samples
+
+Before connection authoring, choose original endpoints or provide a structured sample. Generate
+the current manifest with `python scripts/connections_manifest.py --bundle <bundle> --out
+<private-output>`, then copy each `source_key` into a private JSON `connection-targets/1` sample:
+
+```json
+{"schema":"connection-targets/1","confirmed":true,"mappings":[
+  {"sourceKey":"v1:<current-manifest-key>","confirmed":true,
+   "target":{"class":"databricks","server":"workspace.cloud.databricks.com",
+             "httpPath":"/sql/1.0/warehouses/example","database":"catalog","schema":"schema"},
+   "bindings":[{"table":"Orders","partition":"Orders","targetTable":"orders"}]}
+]}
+```
+
+Import using `--target-map <sample> --out <new-private-output>`. All source keys require an explicit
+unique mapping; ambiguous sanitized identities refuse rather than guessing. Output is JSON even
+when the legacy format selector requests Markdown. Existing target receipts are immutable:
+identical reruns are no-ops, differing receipts need a new output directory. No source, model,
+sample or report is mutated by import.
+
+Supported templates: `snowflake` (requires warehouse), `databricks` (requires httpPath),
+`sqlserver`, `postgres`; all require server/database/schema. Configuration uses non-secret
+scalar names (1–256 letters/digits, spaces, `_ . / $ -`), hosts use letters/digits/dots/hyphens
+(max 253). Quotes, controls, URL credentials/query/fragments, assignments and arbitrary M are
+refused without echoing values. Unknown keys, including secret fields, are refused. Use the
+host credential interaction separately. This structured sample is the supported alternative
+to importing an arbitrary PBIP containing executable M.
+
+The semantic builder applies templates to working artifacts only, using its normal authoring
+skills and edit declarations. Snowflake-to-Databricks creates an explicit target navigation
+template, **not** a custom-SQL translator. SQL/type/security/field compatibility remains required
+work. Pristine connection definitions and provenance remain unchanged.
+
+Static comparison: rerun import with `--check-targets --model <working.SemanticModel>` and a
+new private output directory. Only physical working models under `<bundle>/pbip` or
+`<package>/fabric` are accepted. Each mapped table must have one matching named M partition
+with import mode and a complete canonical source expression. Comparison ignores CRLF,
+leading indentation and final newlines only; trailing whitespace and comments differ.
+Exit 0 means target text matched, 1 mismatch, 3 refusal/missing or unsupported evidence,
+2 invalid CLI usage. I/O input errors also return 3. Source attribution and source semantics
+are explicitly UNVERIFIED in every result; **TEXT_MATCHED is never PASS or COMPLETE**.
+Run independent connection/fidelity/data/binding checks too. Do not suppress original findings:
+retain and explain intentional target differences separately. — migrating a Tableau estate into Fabric
+
 **Audience:** the engineer sitting at the keyboard during a live migration, who may never have seen
 this repo before. Read it top to bottom once the day before; use it as a lookup table on the day.
 
