@@ -43,6 +43,7 @@ FRONT_DOOR_ARTIFACTS = (
     "assessment/assessment.json",
     "assessment/estate.db",
     "assessment/raw/workbooks.json",
+    "assessment/assessment-reuse.json",
     "assets/harvested-workbook.twb",
     "assets/harvested-workbook.twbx",
     "assets/harvested-datasource.tds",
@@ -88,6 +89,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runs-parent", type=Path, help="parent root for _runs (default: toolkit repository)")
     parser.add_argument("--storage-decision", type=Path, help="engine-owned datasource storage policy JSON")
     parser.add_argument("--session-id", help="Copilot session UUID for run-cost attribution")
+    parser.add_argument("--assessment-run", type=Path, help="absolute prior run containing reusable assessment")
+    parser.add_argument(
+        "--assessment-policy",
+        choices=("current", "acknowledge", "refresh"),
+        default="current",
+        help="require current revisions, acknowledge historical planning, or explicitly reassess",
+    )
     parser.add_argument(
         "--assess-only", action="store_true", help="assess a site and write offline HTML; do not migrate"
     )
@@ -565,6 +573,11 @@ def _front_door_command(args: argparse.Namespace, env_path: Path, short_root: Pa
         ("--workbook", args.workbook),
         ("--storage-decision", str(args.storage_decision) if args.storage_decision else None),
         ("--session-id", args.session_id),
+        ("--assessment-run", str(getattr(args, "assessment_run", "") or "") or None),
+        (
+            "--assessment-policy",
+            getattr(args, "assessment_policy", "current") if getattr(args, "assessment_run", None) else None,
+        ),
     ):
         if value:
             command.extend([flag, value])
@@ -671,6 +684,17 @@ def main(
     parser = build_parser()
     args = parser.parse_args(argv)
     assessing = args.assess_only
+    if args.assessment_run is not None:
+        import assessment_reuse  # pylint: disable=import-outside-toplevel
+
+        if assessing:
+            parser.error("--assessment-run cannot be combined with --assess-only")
+        try:
+            assessment_reuse.physical_root(args.assessment_run)
+        except assessment_reuse.ReuseError as exc:
+            parser.error(str(exc))
+    elif args.assessment_policy != "current":
+        parser.error("--assessment-policy requires --assessment-run")
     stage_total = 4 if assessing else 5
     if assessing and (args.project is not None or args.workbook is not None or args.storage_decision is not None):
         parser.error("--assess-only conflicts with --project, --workbook and --storage-decision")
@@ -759,6 +783,10 @@ def main(
     }
     if assessing:
         metadata["intent"] = "assessment"
+    if args.assessment_run is not None:
+        metadata["front_door"]["assessment_run"] = str(args.assessment_run)
+        metadata["front_door"]["assessment_policy"] = args.assessment_policy
+        metadata["assessment_scope"] = "reused_planning" if args.assessment_policy != "refresh" else "site"
     try:
         run = work_dirs.allocate_run(display, repo_root=parent, extra_manifest=metadata)
     except (OSError, ValueError, RuntimeError) as exc:
@@ -956,11 +984,72 @@ def main(
             "--survey",
             str(survey_path),
         ]
-        result = run_child("assessment", 2, assess_command, child_env, assessment)
-        if result.code != 0:
-            finish(result, 2, "FAILED")
-            failed = True
-            return _finalize(root, bundle, oracle_root, failed, invalid, fidelity)
+        reused = args.assessment_run is not None and args.assessment_policy != "refresh"
+        if reused:
+            import assessment_reuse  # pylint: disable=import-outside-toplevel
+
+            try:
+                captured = root / "scratch" / "assessment-snapshot"
+                snapshot = assessment_reuse.capture(args.assessment_run, captured, env)
+                selected, selected_project, selected_workbook = _resolve_selection(
+                    captured / "estate.db", survey_ids, args
+                )
+                expected_assets = _expected_harvest(captured / "estate.db", selected_project, selected_workbook)
+                observations = assessment_reuse.check_sources(
+                    snapshot,
+                    env,
+                    selected,
+                    expected_assets,
+                    project=selected_project,
+                    survey=survey,
+                    database=captured / "estate.db",
+                    project_membership=selected_workbook is None,
+                )
+                if args.assessment_policy == "current" and any(row["state"] != "current" for row in observations):
+                    assessment.mkdir(parents=True, exist_ok=True)
+                    (assessment / "assessment-reuse.json").write_text(
+                        json.dumps(
+                            {
+                                "schema": "assessment-reuse/1",
+                                "outcome": "decision_required",
+                                "policy": args.assessment_policy,
+                                "sources": observations,
+                                "source_run": snapshot["source_run"],
+                                "authority": "historical_planning_only",
+                            },
+                            indent=2,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    raise assessment_reuse.ReuseError(
+                        "selected revisions are stale or unknown; choose --assessment-policy acknowledge "
+                        "for historical planning, refresh for a new assessment, or revise scope"
+                    )
+                assessment_reuse.publish(snapshot, captured, assessment, observations, args.assessment_policy)
+                result = StageResult("assessment", None, assessment / "assessment-reuse.json")
+            except (assessment_reuse.ReuseError, EvidenceError, OSError, RuntimeError) as exc:
+                detail = (
+                    str(exc) if isinstance(exc, (assessment_reuse.ReuseError, EvidenceError)) else type(exc).__name__
+                )
+                print(f"Assessment reuse CANNOT_ESTABLISH: {detail}", file=sys.stderr, flush=True)
+                emit(
+                    {
+                        "event": "stage",
+                        "stage": "assessment",
+                        "native_exit_code": None,
+                        "state": "cannot_establish",
+                        "artifact": None,
+                    }
+                )
+                invalid = True
+                return _finalize(root, bundle, oracle_root, failed, invalid, fidelity)
+        else:
+            result = run_child("assessment", 2, assess_command, child_env, assessment)
+            if result.code != 0:
+                finish(result, 2, "FAILED")
+                failed = True
+                return _finalize(root, bundle, oracle_root, failed, invalid, fidelity)
         try:
             assessment_doc = _read_json(assessment / "assessment.json", "assessment")
             if not isinstance(assessment_doc, dict) or not (assessment / "estate.db").is_file():
@@ -977,7 +1066,9 @@ def main(
             finish(result, 2, "CANNOT_ESTABLISH", str(exc))
             invalid = True
             return _finalize(root, bundle, oracle_root, failed, invalid, fidelity)
-        finish(result, 2, "OK", db_counts)
+        finish(
+            result, 2, "REUSED" if reused else "OK", "historical planning only; " + db_counts if reused else db_counts
+        )
 
         harvest_command = [
             *common_python,

@@ -904,7 +904,7 @@ def _path_budget(run: Path, states: dict[str, str]) -> dict[str, Any]:
     return budget
 
 
-def _rerun(manifest: dict[str, Any]) -> dict[str, Any]:
+def _rerun(manifest: dict[str, Any]) -> dict[str, Any]:  # pylint: disable=too-many-statements
     """The front door's own rerun command, rebuilt from the run's recorded selection."""
     import start_migration  # pylint: disable=import-outside-toplevel
 
@@ -922,7 +922,23 @@ def _rerun(manifest: dict[str, Any]) -> dict[str, Any]:
         workbook=text(selection.get("workbook")),
         storage_decision=text(front.get("storage_decision")) if recorded else None,
         session_id=text(attribution.get("session_id")),
+        assessment_run=text(front.get("assessment_run")) if recorded else None,
+        assessment_policy=front.get("assessment_policy", "current") if recorded else "current",
     )
+    if isinstance(front, dict) and ("assessment_run" in front or "assessment_policy" in front):
+        import assessment_reuse  # pylint: disable=import-outside-toplevel
+
+        try:
+            if (
+                not recorded
+                or args.assessment_run is None
+                or "assessment_policy" not in front
+                or args.assessment_policy not in assessment_reuse.POLICIES
+            ):
+                raise assessment_reuse.ReuseError("assessment reuse choice is unavailable")
+            assessment_reuse.physical_root(Path(args.assessment_run))
+        except (assessment_reuse.ReuseError, TypeError, ValueError):
+            return {"command": None, "authoritative": False, "reason": "assessment_reuse_choice_unavailable"}
     env = Path(front["env"]) if recorded else start_migration.build_parser().get_default("env")
     rerun: dict[str, Any] = {
         "command": start_migration._front_door_command(  # pylint: disable=protected-access
@@ -937,7 +953,7 @@ def _rerun(manifest: dict[str, Any]) -> dict[str, Any]:
     return rerun
 
 
-def _next_action(  # pylint: disable=too-many-arguments
+def _next_action(  # pylint: disable=too-many-arguments,too-many-statements
     run_ok: bool,
     report_scope: str,
     units: list[UnitStatus],
@@ -957,6 +973,9 @@ def _next_action(  # pylint: disable=too-many-arguments
     if not run_ok:
         headline = "Confirm the explicitly selected local run; child evidence was not read."
         kind, owner, gate = "human", "work_dirs.py", "run_location"
+    elif rerun is not None and rerun.get("command") is None:
+        headline = "Confirm the saved assessment reference and reuse policy before starting a new run."
+        kind, owner, gate = "human", "start_migration.py", "assessment_reuse_choice"
     elif any(finding.unassessable for finding in findings):
         headline = "Inspect unassessable evidence in place; preserve retained work before deciding what to do."
         details = [asdict(finding) for finding in findings if finding.unassessable]

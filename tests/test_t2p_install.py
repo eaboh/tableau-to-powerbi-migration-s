@@ -601,6 +601,28 @@ def _source_module() -> ModuleType:
     return module
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--assessment-policy", "acknowledge"],
+        ["--assessment-run", "PRIVATE_RELATIVE_RUN_CANARY"],
+    ],
+)
+def test_source_installed_reuse_refusal_precedes_binding(monkeypatch, capsys, options) -> None:
+    """New reuse syntax errors cannot bind backends or reflect a private installed run root."""
+    module = _source_module()
+    monkeypatch.setattr(module, "_install_binding", lambda *_args: pytest.fail("installation bound"))
+    monkeypatch.setattr(module, "_delegate", lambda *_args, **_kwargs: pytest.fail("owner dispatched"))
+    assert module.main(["start", "--project", "Fixture", *options, "--json"], installed=True) == 2
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["limitations"] == ["invalid_arguments_use_help"]
+    assert result["authority"] is result["delegated_exit_code"] is None
+    assert result["run_location"] is None
+    assert captured.err == ""
+    assert "PRIVATE_RELATIVE_RUN_CANARY" not in captured.out
+
+
 def _assert_closed_help(stdout: bytes) -> None:
     choices = re.findall(rb"\{([^{}\r\n]+)\}", stdout)
     assert choices == [b"doctor,start,assess,status,units,refresh,desktop,check"] * 2, (

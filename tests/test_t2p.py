@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import t2p  # noqa: E402
 import tableau_env  # noqa: E402
 import work_dirs  # noqa: E402
-from test_start_migration import ENV, _Pipeline, _captured  # noqa: E402
+from test_start_migration import ENV, _Pipeline, _captured, _reuse_source  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -648,6 +648,49 @@ def test_start_owner_parity_and_native_stages(monkeypatch, tmp_path, capsys, nat
     assert all(options["stdout"] is None and options["stderr"] is None for options in pipeline.options), (
         "stage output must stream without buffering"
     )
+
+
+def test_start_facade_reports_reused_assessment_without_native_success(monkeypatch, tmp_path, capsys):
+    """Facade forwarding exposes planning reuse, never a fictitious successful assessment child."""
+    import start_migration
+
+    prior, _inventory, _calls, survey = _reuse_source(tmp_path, monkeypatch)
+    pipeline = _Pipeline(monkeypatch, tmp_path, capsys, survey=survey)
+    monkeypatch.setattr(
+        start_migration,
+        "diagnose_env",
+        lambda *a, **k: (dict(ENV), {"status": "READY_TO_ATTEMPT", "checks": [], "reason": "presence_only"}),
+    )
+    assert t2p.main(["start", "--project", "Finance", "--assessment-run", str(prior.root), "--json"]) == 0
+    out, _err = _captured(capsys, pipeline)
+    result = json.loads(out)
+    jsonschema.validate(result, t2p.ENVELOPE_SCHEMA)
+    assessment = next(row for row in result["stages"] if row["stage"] == "assessment")
+    assert assessment["state"] == "reused"
+    assert assessment["native_exit_code"] is None
+    assert assessment["artifact"] == "assessment/assessment-reuse.json"
+    assert any(
+        item["locator"] == "assessment/assessment-reuse.json" and item["check"] == "not_established"
+        for item in result["evidence"]
+    )
+    assert not any("assess_estate.py" in command for command in pipeline.commands)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--assessment-policy", "acknowledge"],
+        ["--assessment-run", "relative-private-canary"],
+    ],
+)
+def test_invalid_reuse_options_refuse_before_binding_or_run_root(monkeypatch, capsys, options):
+    """New malformed reuse options cannot dispatch or reflect a private run root."""
+    monkeypatch.setattr(t2p, "_delegate", lambda *_args, **_kwargs: pytest.fail("backend dispatched"))
+    monkeypatch.setattr(t2p, "_run_line", lambda *_args, **_kwargs: pytest.fail("run root resolved"))
+    assert t2p.main(["start", "--project", "Finance", *options, "--json"]) == 2
+    result, captured = _json(capsys)
+    assert result["delegated_exit_code"] is None
+    assert "relative-private-canary" not in captured.out + captured.err
 
 
 def test_assess_facade_is_additive_and_projects_assessment_status(monkeypatch, tmp_path, capsys):

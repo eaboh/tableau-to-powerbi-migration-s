@@ -14,6 +14,7 @@ This catalog is the advanced and implementation reference. Ordinary migrations f
 
 | Script | What it does | Called by |
 |---|---|---|
+| `assessment_reuse.py` | Captures fixed prior-run assessment planning artifacts without modifying the source, verifies selected PAT-visible identities/dependencies/revisions, and publishes attributed historical planning evidence. Never reuses validation authority or source downloads. | `start_migration.py` |
 | `tableau_metadata.py` | Acquires all cursor pages of a Metadata connection using `first`/`after`, `nodes`, `totalCount`, and `pageInfo`. Validates stable counts, cursor progress, and per-connection identities. Partial GraphQL data, malformed pages, duplicate identities, and nested overflow are explicit incomplete results, never successful empty lists. | `tableau_view_types.py`, `assess_estate.py`, `tableau_lineage.py` |
 
 View typing, its blank-LUID census, assessment structure, and lineage now read all outer
@@ -1333,6 +1334,30 @@ t2p check <explicit-package-path> [--scope model] [--json]
 t2p desktop observe {--pid <pid> [--process-start <token>] | <pbip-or-folder>} [--json]
 t2p desktop collect {--pid <pid> --process-start <token> | <pbip-or-folder>} --out <private-file>
 ```
+
+Reuse a prior assessment with
+`t2p start --project <name-or-LUID> --assessment-run <absolute-prior-run>`.
+The direct `start_migration.py` entry point also supports a workbook selector. The saved root
+must be the intact physical allocated run, not `latest`, a moved alias or its `assessment/`
+subdirectory. Server/site, original capture time, JSON/SQLite/raw identities and primary
+completeness are verified. A new run captures only fixed planning artifacts with custody hashes;
+the original run is never modified. Its original broader catalog and aggregates remain historical,
+while current checks and acquisition are restricted to selected workbooks and required providers.
+
+The default `--assessment-policy current` requires established, unchanged selected revisions.
+Stale or missing revision evidence produces one grouped decision receipt, not a silent full
+reassessment. `--assessment-policy acknowledge` explicitly accepts historical planning scores
+only; it cannot bypass changed/missing source identity, project membership or dependencies.
+`--assessment-policy refresh` explicitly runs the ordinary new assessment. Refresh the assessment,
+revise the selected scope, or rerun without reuse when identity cannot be established. No
+item-level assessment refresh is currently supported.
+
+Preflight, a fresh dependency survey, PAT REST inventory checks, source downloads, current oracle
+capture and conversion still run. No old Admin Insights, oracle, package, validation receipt or
+COMPLETE status is copied. `assessment/assessment-reuse.json` records the original capture,
+artifact hashes, selected freshness observations, policy and historical-only authority. Even
+matching revisions establish metadata freshness, not source-byte identity or migration fidelity.
+Offline regression controls do not establish live Tableau/canonical-engine acceptance.
 
 `uv sync --all-extras --no-editable` is the operator setup in the selected checkout. No-sync alone
 does not select an environment from another project, and default uv sync/run can restore editable

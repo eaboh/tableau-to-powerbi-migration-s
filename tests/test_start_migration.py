@@ -238,6 +238,127 @@ def _write_assessment(
     connection.close()
 
 
+def _reuse_source(tmp_path: Path, monkeypatch):
+    """Create a genuine prior assessment with captured revisions and an independent PAT inventory."""
+    prior = work_dirs.allocate_run(
+        "saved",
+        repo_root=tmp_path / "prior",
+        extra_manifest={"scope": {"server": ENV["TABLEAU_SERVER_URL"], "site": ENV["TABLEAU_SITE"]}},
+    )
+    _write_assessment(prior.assessment)
+    revision = "2026-01-01T00:00:00Z"
+    with sqlite3.connect(prior.assessment / "estate.db") as conn:
+        conn.execute("UPDATE workbook SET updated_at=?", (revision,))
+    inventory = {
+        "workbooks": [{"id": WORKBOOK, "name": "Finance", "project": {"id": PROJECT}, "updatedAt": revision}],
+        "datasources": [
+            {"id": DATASOURCE, "name": "Ledger", "project": {"id": "project-other"}, "updatedAt": revision}
+        ],
+        "projects": [{"id": PROJECT, "name": "Finance"}],
+    }
+    (prior.assessment / "raw").mkdir()
+    for name, rows in inventory.items():
+        (prior.assessment / "raw" / f"{name}.json").write_text(json.dumps(rows), encoding="utf-8")
+    calls = []
+
+    class Site:
+        """Only current PAT inventories are available, never old collection authority."""
+
+        site_id = "fixture"
+
+        def __init__(self, env):
+            assert env == ENV
+
+        def sign_in(self):
+            """Record the current-source PAT session."""
+            calls.append("signin")
+
+        def sign_out(self):
+            """Record PAT cleanup."""
+            calls.append("signout")
+
+        def paged(self, _path, collection, _item):
+            """Return live independently mutable inventory."""
+            calls.append(collection)
+            return inventory[collection], None
+
+        def scrub_text(self, text):
+            """Use the production redactor for live revision observations."""
+            return text
+
+    monkeypatch.setattr(assess_estate, "Site", Site)
+    survey = _survey(project=True)
+    survey["workbooks"][0].update(
+        dependencies_unknown=False,
+        published_dependencies=[{"luid": DATASOURCE, "status": "resolved"}],
+    )
+    return prior, inventory, calls, survey
+
+
+def test_reuses_assessment_in_two_new_runs_without_reusing_authority(monkeypatch, tmp_path, capsys):
+    """The real frontend skips assessment, not survey/acquisition/oracle, and preserves retry choice."""
+    import run_status
+
+    prior, _inventory, calls, survey = _reuse_source(tmp_path, monkeypatch)
+    source_bytes = {path.relative_to(prior.root): path.read_bytes() for path in prior.root.rglob("*") if path.is_file()}
+    pipeline = _Pipeline(monkeypatch, tmp_path, capsys, survey=survey)
+    observed = []
+    for _run in (1, 2):
+        code = frontdoor.main(["--project", PROJECT, "--assessment-run", str(prior.root)], observer=observed.append)
+        assert code == 0
+    allocated = [Path(record["run"]) for record in observed if record["event"] == "allocated"]
+    assert len(set(allocated)) == 2
+    assert all(_script_name(command) != "assess_estate.py" for command in pipeline.commands)
+    assert [_script_name(command) for command in pipeline.commands].count("run_engine_survey.py") == 2
+    assert [_script_name(command) for command in pipeline.commands].count("capture_tableau_oracle.py") == 2
+    for run in allocated:
+        receipt = json.loads((run / "assessment" / "assessment-reuse.json").read_text(encoding="utf-8"))
+        assert receipt["authority"] == "historical_planning_only"
+        assert receipt["original_capture_at"] == "2026-01-01T00:00:00Z"
+        manifest = json.loads((run / "run.json").read_text(encoding="utf-8"))
+        retry = run_status._rerun(manifest)
+        assert "--assessment-run" in retry["command"]
+        assert str(prior.root) in retry["command"]
+        assert "--assessment-policy current" in retry["command"]
+        assert not (run / "assessment" / "admin_insights.json").exists()
+    assessment_stages = [record for record in observed if record.get("stage") == "assessment"]
+    assert all(record["native_exit_code"] is None and record["state"] == "reused" for record in assessment_stages)
+    assert source_bytes == {
+        path.relative_to(prior.root): path.read_bytes() for path in prior.root.rglob("*") if path.is_file()
+    }
+    assert calls.count("signout") == 2
+
+
+@pytest.mark.parametrize(
+    "policy,expected,collector", [("current", 3, False), ("acknowledge", 0, False), ("refresh", 0, True)]
+)
+def test_stale_assessment_requires_explicit_policy(monkeypatch, tmp_path, capsys, policy, expected, collector):
+    """No default full reassessment; acknowledgement retains limits and refresh is explicit."""
+    prior, inventory, calls, survey = _reuse_source(tmp_path, monkeypatch)
+    inventory["datasources"][0]["updatedAt"] = "2026-02-01T00:00:00Z"
+    pipeline = _Pipeline(monkeypatch, tmp_path, capsys, survey=survey)
+    code = frontdoor.main(
+        [
+            "--project",
+            PROJECT,
+            "--assessment-run",
+            str(prior.root),
+            "--assessment-policy",
+            policy,
+        ]
+    )
+    assert code == expected
+    assert any(_script_name(command) == "assess_estate.py" for command in pipeline.commands) is collector
+    if policy == "current":
+        assert not any(_script_name(command) == "harvest_estate_assets.py" for command in pipeline.commands)
+        run = next(work_dirs.runs_root(pipeline.root).glob("001-*"))
+        receipt = json.loads((run / "assessment" / "assessment-reuse.json").read_text(encoding="utf-8"))
+        assert receipt["outcome"] == "decision_required"
+        assert any(row["state"] == "stale" for row in receipt["sources"])
+    if policy == "refresh":
+        assert calls == []
+
+
 def _write_harvest(out: Path, *, outcome: str = "theirs_only") -> None:
     out.mkdir(parents=True, exist_ok=True)
     row = {"kind": "workbook", "luid": WORKBOOK}

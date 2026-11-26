@@ -255,6 +255,13 @@ def build_parser(prog: str = "python -B scripts/t2p.py") -> argparse.ArgumentPar
             child.add_argument("--runs-parent", type=Path, help="explicit parent for _runs; no relocation")
             child.add_argument("--storage-decision", type=Path, help="existing engine-owned storage policy")
             child.add_argument("--session-id", help="existing Copilot session UUID attribution")
+            child.add_argument("--assessment-run", type=Path, help="absolute prior assessment run")
+            child.add_argument(
+                "--assessment-policy",
+                choices=("current", "acknowledge", "refresh"),
+                default="current",
+                help="current revisions, acknowledged historical planning, or explicit reassessment",
+            )
         if command == "status":
             child.add_argument("--run", required=True, help="absolute local physical run; never latest")
         if command == "assess":
@@ -918,9 +925,16 @@ def start(args: argparse.Namespace, result: dict) -> int:  # pylint: disable=too
         ("--runs-parent", args.runs_parent),
         ("--storage-decision", None if assessing else getattr(args, "storage_decision", None)),
         ("--session-id", args.session_id),
+        ("--assessment-run", getattr(args, "assessment_run", None)),
+        (
+            "--assessment-policy",
+            getattr(args, "assessment_policy", "current") if getattr(args, "assessment_run", None) else None,
+        ),
     ):
         if value is not None:
             delegated.extend([flag, str(value)])
+    if not getattr(args, "assessment_run", None) and getattr(args, "assessment_policy", "current") != "current":
+        raise ValueError("--assessment-policy requires --assessment-run")
 
     def observe(record: dict) -> None:
         event = record["event"]
@@ -1610,7 +1624,13 @@ def main(argv: list[str] | None = None, *, installed: bool = False) -> int:
         if not argv:
             parser.print_help(sys.stderr)
             return 2
-        args = parser.parse_args(argv)
+        parsed = parser.parse_args(argv)
+        if parsed.command == "start" and (
+            (parsed.assessment_run is None and parsed.assessment_policy != "current")
+            or (parsed.assessment_run is not None and not parsed.assessment_run.is_absolute())
+        ):
+            raise ArgumentError("invalid_arguments_use_help")
+        args = parsed
         if args.command == "start" and not args.project.strip():
             raise ArgumentError("nonempty_project_required")
         if args.command == "desktop" and not _desktop_target_valid(args):

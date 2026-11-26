@@ -44,6 +44,25 @@ After successful capture, continue with the [agent handoff](../AGENTS.md#startin
 private briefs, START_READY / 0 before builders or validators, and independent Tableau sign-off.
 Keep status output private. Doctor checks tooling, not source access or migration readiness.
 
+To use an existing assessment in another migration:
+
+```powershell
+& $t2p start --project '<name-or-LUID>' --assessment-run '<absolute-prior-run>'
+```
+
+The prior run remains unchanged, and a new run is allocated. Reuse checks current PAT-visible
+selected workbook/provider identities, dependencies and revisions; unrelated snapshot rows
+remain historical. It skips assessment scoring/IAM collection, not the fresh survey, downloads,
+oracle capture, conversion or current validation. Saved results never become validation authority.
+Read the new run's private `assessment/assessment-reuse.json` for capture time and freshness.
+
+If revisions are stale or unavailable, the default stops with a grouped decision.
+Add `--assessment-policy acknowledge` to accept historical planning evidence explicitly,
+or `--assessment-policy refresh` to request an ordinary new assessment. Changed/missing
+identities, project membership or dependencies cannot be acknowledged into correctness;
+refresh assessment or revise scope. Full reassessment is never launched automatically.
+Select the intact absolute prior run, not `latest` or the `assessment/` folder.
+
 [Installation details](../scripts/README.md#narrow-t2ppy-pilot-refs-749--773) ·
 [Doctor troubleshooting](#doctor-fallback).
 

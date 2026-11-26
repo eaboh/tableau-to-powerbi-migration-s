@@ -1390,6 +1390,31 @@ def test_path_ceiling_failure_offers_the_front_door_rerun(tmp_path: Path) -> Non
     assert "check both" in rerun["note"]
 
 
+@pytest.mark.parametrize(
+    "reuse",
+    [
+        {"assessment_run": "relative", "assessment_policy": "current"},
+        {"assessment_policy": "acknowledge"},
+        {"assessment_run": "/absolute/prior", "assessment_policy": True},
+        {"assessment_run": "/absolute/prior", "assessment_policy": "guess"},
+        {"assessment_run": None, "assessment_policy": "current"},
+        {"assessment_run": 123, "assessment_policy": "current"},
+        {"assessment_run": "/absolute/prior"},
+    ],
+)
+def test_malformed_assessment_reuse_retry_requires_human(tmp_path: Path, reuse: dict) -> None:
+    """Status cannot silently replace a malformed saved-assessment choice with a fresh assessment."""
+    run = _run(tmp_path)
+    _path_failure(run, {"env": str(tmp_path / "private.env"), **reuse})
+    payload, _code = rs.build_status(str(run))
+    rerun = payload["path_budget"]["rerun"]
+    assert rerun["command"] is None and rerun["authoritative"] is False
+    assert rerun["reason"] == "assessment_reuse_choice_unavailable"
+    assert payload["next_action"]["kind"] == "human"
+    assert payload["next_action"]["gate"] == "assessment_reuse_choice"
+    assert payload["next_action"]["command"] is None
+
+
 def _bridge(run: Path, occurrences: list[dict], issues: list | None = None) -> bytes:
     manifest = {
         "scope_bridge": {
