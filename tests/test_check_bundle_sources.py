@@ -72,6 +72,59 @@ def test_m_parameters_and_cli_tokens(tmp_path, capsys, expressions, undefined, e
         assert "declared endpoint(s) are reachable" not in out
 
 
+def test_parameter_references_exclude_dax_comments_and_m_literals(tmp_path: Path, capsys) -> None:
+    """Only executable M quoted identifiers count, including after the first source line."""
+    bundle = _model(
+        tmp_path,
+        _param("Server", "s"),
+        {
+            "Sales": 'Sql.Database(#"Server", "db"),\n'
+            '\t\t\t\t// #"CommentOnly"\n'
+            '\t\t\t\t/* #"BlockCommentOnly" */\n'
+            '\t\t\t\tLabel = "literal #""StringOnly""",\n'
+            '\t\t\t\tData = Source{[Name=#"Database"]}[Data],'
+        },
+    )
+    table = cbs.find_model_dir(bundle) / "tables" / "Sales.tmdl"
+    with table.open("a", encoding="utf-8") as stream:
+        stream.write(
+            '\n\tcolumn Label\n\t\texpression = FORMAT(1, "0.###############") & "% completed"\n'
+            '\t\tannotation Note = #"AnnotationOnly"\n'
+            '\tpartition Labels = calculated\n\t\tsource = { "#""CalculatedPartitionOnly""" }\n'
+        )
+    params = cbs.check_m_parameters(cbs.find_model_dir(bundle))
+    assert params["referenced"] == ["Database", "Server"]
+    assert params["undefined"] == ["Database"]
+    assert cbs.main([str(bundle)]) == 1
+    out = capsys.readouterr().out
+    assert "M_PARAM_UNDEFINED: Database" in out
+    assert ") & " not in out
+
+
+def test_escaped_m_parameter_name_is_resolved_and_checked_for_empty(tmp_path: Path, capsys) -> None:
+    """Doubled quotes identify one real parameter, not a truncated or invented reference."""
+    bundle = _model(
+        tmp_path,
+        _param("'Warehouse \"Quoted\"'", ""),
+        {"Sales": 'Snowflake.Databases("s", #"Warehouse ""Quoted"""),'},
+    )
+    params = cbs.check_m_parameters(cbs.find_model_dir(bundle))
+    assert params["undefined"] == []
+    assert params["referenced"] == params["empty"] == ['Warehouse "Quoted"']
+    assert cbs.main([str(bundle)]) == 1
+    assert 'M_PARAM_EMPTY: Warehouse "Quoted"' in capsys.readouterr().out
+
+
+def test_m_scan_error_cannot_hide_undefined_parameter(tmp_path: Path, capsys) -> None:
+    """An incomplete token scan cannot establish that all references have been checked."""
+    bundle = _model(tmp_path, "", {"Sales": '/* unterminated comment\n\t\t\t\t#"Missing"'})
+    assert cbs.main([str(bundle)]) == 1
+    out = capsys.readouterr().out
+    assert "M_SCAN_ERROR:" in out
+    assert "unterminated block comment" in out
+    assert "every referenced M parameter is defined" not in out
+
+
 def test_two_declared_servers_collapsed_to_one_is_caught(tmp_path: Path, capsys) -> None:
     """Parameters are clean and the model refreshes; only endpoint counting sees the wrong server."""
     model = _model(

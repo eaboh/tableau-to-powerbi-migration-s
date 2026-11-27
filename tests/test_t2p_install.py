@@ -44,10 +44,10 @@ UNESTABLISHED = [
 ]
 SYNTAX = [
     ["next"],
-    ["start"],
-    ["start", "--project", " "],
-    ["start", "--proj", "fixture"],
-    ["start", "--project", "fixture", "--workbook", "PRIVATE_ARGV_CANARY"],
+    ["start", "--advanced"],
+    ["start", "--advanced", "--project", " "],
+    ["start", "--advanced", "--proj", "fixture"],
+    ["start", "--advanced", "--project", "fixture", "--workbook", "PRIVATE_ARGV_CANARY"],
     ["assess", "--project", "fixture"],
     ["assess", "--storage-decision", "relative.policy"],
     ["doctor", "--show-values"],
@@ -150,14 +150,22 @@ from fixture_witness import ROOT, note, state
 note("import:start_migration")
 
 def main(argv, *, observer=None, diagnostic_env=False):
+    native_argv = list(argv)
+    advanced = "--advanced" in argv
+    argv = [item for item in argv if item != "--advanced"]
     options = dict(zip(argv[::2], argv[1::2]))
     selected_env = options.get("--env", str(ROOT / ".env"))
     parent = options.get("--runs-parent")
-    note("start", argv=argv, diagnostic_env=diagnostic_env, env=selected_env,
+    note("start", argv=native_argv, diagnostic_env=diagnostic_env, env=selected_env,
          resolved_env=str(__import__("pathlib").Path(selected_env).resolve()),
          default_runs=str((__import__("pathlib").Path(parent).resolve()
                            if parent is not None else ROOT) / "_runs"))
     current = state()
+    if not advanced and "--assess-only" not in argv:
+        observer({"event": "simple", "route": "simple/v1", "stages": {},
+                  "actions": [{"id": "intake:mode", "kind": "human",
+                               "choices": ["single", "batch"]}], "limitations": []})
+        return 3
     if "--storage-decision" in options:
         subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "storage_witness.py"),
                         options["--storage-decision"]], check=True, cwd=ROOT)
@@ -202,7 +210,16 @@ def _environment(root: Path) -> dict[str, str]:
     """Allowlisted build/runtime transport; never inherit workstation credentials or profiles."""
     env = {
         key: os.environ[key]
-        for key in ("PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "SYSTEMDRIVE", "PROCESSOR_ARCHITECTURE")
+        for key in (
+            "PATH",
+            "SystemRoot",
+            "WINDIR",
+            "COMSPEC",
+            "PATHEXT",
+            "SYSTEMDRIVE",
+            "PROCESSOR_ARCHITECTURE",
+            "UV_SYSTEM_CERTS",
+        )
         if key in os.environ
     }
     for key, leaf in (
@@ -512,7 +529,11 @@ def _invoke(
     direct: bool = False,
     env: dict | None = None,
     cwd: Path | None = None,
+    advanced: bool = True,
 ) -> subprocess.CompletedProcess:
+    # The fixture owner models the retained legacy stages, not the new source-preparation backend.
+    if args and args[0] == "start" and advanced and "--advanced" not in args:
+        args = (args[0], "--advanced", *args[1:])
     command = (
         [str(lab.python), "-B", str(lab.toolkit / "scripts" / "t2p.py")]
         if direct
@@ -837,7 +858,30 @@ def test_installed_help_and_syntax_before_binding(
             if argv and argv[0] in {"doctor", "start", "assess"}:
                 flags.add(b"--env")
             if argv == ["start"]:
-                flags.update({b"--project", b"--runs-parent", b"--storage-decision", b"--session-id"})
+                flags.update(
+                    {
+                        b"--project",
+                        b"--runs-parent",
+                        b"--storage-decision",
+                        b"--session-id",
+                        b"--advanced",
+                        b"--mode",
+                        b"--style",
+                        b"--numeric",
+                        b"--workbook",
+                        b"--local",
+                        b"--assessment",
+                        b"--resume",
+                        b"--pbip",
+                        b"--connection-example",
+                        b"--target",
+                        b"--design",
+                        b"--decision",
+                        b"--replacement",
+                        b"--record",
+                        b"--refresh-strategy",
+                    }
+                )
             if argv == ["assess"]:
                 flags.update({b"--runs-parent", b"--session-id"})
             if argv == ["status"]:
@@ -1294,6 +1338,7 @@ def test_installed_start_argv_native_and_json_parity(
     _write_state(lab, start_code=code, stages=stages, interrupt=interrupt)
     args = [
         "start",
+        "--advanced",
         "--project",
         "Exact Project é",
         "--env",
@@ -1373,7 +1418,7 @@ def test_installed_start_default_roots_and_preallocation(installation: SimpleNam
         )
         result = _json_result(child, 1 if early else 0)
         calls = _calls(lab, "start")
-        assert len(calls) == 1 and calls[0]["argv"] == ["--project", "fixture"]
+        assert len(calls) == 1 and calls[0]["argv"] == ["--advanced", "--project", "fixture"]
         assert calls[0]["env"] == str(lab.toolkit / ".env")
         assert calls[0]["default_runs"] == str(lab.toolkit / "_runs")
         if early:
@@ -1580,6 +1625,17 @@ def test_installed_first_import_and_read_only_cache_controls(installation: Simpl
     finally:
         known_write.unlink()
     _read_only_case(lab)
+
+
+def test_installed_default_start_returns_simple_intake_not_advanced_stages(installation: SimpleNamespace) -> None:
+    lab = installation
+    _write_state(lab)
+    result = _json_result(_invoke(lab, "start", "--json", advanced=False), 3)
+    assert result["route"] == "simple/v1"
+    assert result["human_actions"][0]["id"] == "intake:mode"
+    assert result["stages"] == []
+    assert result["path_report"] is None
+    assert _calls(lab, "start")[0]["argv"] == []
     _read_only_case(lab, prefix=lab.root / "fresh-prefix")
 
 
@@ -1625,6 +1681,7 @@ def _live_streams(lab: SimpleNamespace, *, json_mode: bool, direct: bool = False
         [
             *([str(lab.python), "-B", str(lab.toolkit / "scripts" / "t2p.py")] if direct else [str(lab.console)]),
             "start",
+            "--advanced",
             "--project",
             "fixture",
             *(["--json"] if json_mode else []),

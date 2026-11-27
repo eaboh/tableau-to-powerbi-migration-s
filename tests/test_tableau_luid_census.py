@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import console_safety  # noqa: E402  # pylint: disable=wrong-import-position
 import tableau_luid_census as census_mod  # noqa: E402  # pylint: disable=wrong-import-position
 import tableau_view_types as view_types_mod  # noqa: E402  # pylint: disable=wrong-import-position
+from tableau_inventory_fixtures import connection_body  # noqa: E402  # pylint: disable=wrong-import-position
 
 LUID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 OTHER = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
@@ -183,7 +184,7 @@ class _Stub:
         return None
 
     def _request(self, method, path, *, body=None, accept=None, authed=True, api=None, deadline=None):  # noqa: ARG002
-        return 200, self.body.encode("utf-8"), {}
+        return 200, connection_body(self.body.encode("utf-8")), {}
 
 
 @pytest.fixture(name="run_census")
@@ -413,7 +414,7 @@ class _TransportStub:
     def _request(self, method, path, *, body=None, accept=None, authed=True, api=None, deadline=None):  # noqa: ARG002
         if self.raises is not None:
             raise self.raises
-        return self.status, self.body, {}
+        return self.status, connection_body(self.body), {}
 
 
 TRANSPORT_REFUSALS = [
@@ -557,9 +558,11 @@ def test_a_measurable_run_also_survives_a_cp1252_console(tmp_path):
             scripts=str(Path(census_mod.__file__).parent),
             support=str(Path(view_types_mod.__file__).parent),
             status=200,
-            body=b'{"data": {"workbooks": [{"dashboards": [{"luid": "'
-            + LUID.encode()
-            + b'"}], "sheets": [{"luid": ""}]}]}}',
+            body=connection_body(
+                b'{"data": {"workbooks": [{"dashboards": [{"luid": "'
+                + LUID.encode()
+                + b'"}], "sheets": [{"luid": ""}]}]}}'
+            ),
         ),
         encoding="utf-8",
     )

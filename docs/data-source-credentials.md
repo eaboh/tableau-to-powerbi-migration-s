@@ -22,6 +22,11 @@ missing, and what to do. It is grounded in a first-hand Databricks test (2026-07
      start. It delegates to `pbip-model-refresh`'s existing automatic-source procedure: shipped working
      artifact, trusted engine-emission identities, `--automatic-source-scope` and named live canaries.
      Any sign-in or other dialog stops the run; a human resolves it before a new qualified attempt.
+     Alternatively, the human can select the skill's
+     [staged model fallback](../.github/skills/live-source-reachability/SKILL.md#staged-model-fallback--human-refresh-required):
+     prepare basic connections and table definitions without executing sources, then stop and
+     require the human to review the queries, **Refresh and Save** the working PBIP in Desktop.
+     Verify the same model's named canaries and persistence before report authoring continues.
      A structural refusal is not proof of missing credentials. For a quick read-only check of an
      already loaded model, use
      `python .github/skills/pbip-model-refresh/scripts/probe_desktop_query.py --pid <pid> --canaries <live-tables>`
@@ -212,7 +217,12 @@ missing credentials nor source reachability.
    missing credential from classification or ask for a secret.
 3. **Local:** before builders start, follow the canonical
    [`live-source-reachability` run order](../.github/skills/live-source-reachability/SKILL.md#run-order),
-   including static checks and the shipped working artifact. It delegates refresh to
+   including static checks and the shipped working artifact, or explicitly select its
+   [staged model fallback](../.github/skills/live-source-reachability/SKILL.md#staged-model-fallback--human-refresh-required).
+   That fallback permits offline basic connection/table preparation first, then requires a human
+   Refresh and Save and same-model canary/persistence checks before report authoring.
+   Human confirmation alone is not proof; do not execute an operator-only command for them.
+   The automated route delegates refresh to
    [`pbip-model-refresh`'s automatic-source procedure](../.github/skills/pbip-model-refresh/SKILL.md#automatic-callers---automatic-source-scope-780),
    not an alternate probe/refresh route. Agent-directed refresh requires `--automatic-source-scope`
    with independent trusted engine-emission identities, never identities derived from the current
@@ -236,7 +246,9 @@ missing credentials nor source reachability.
    needs a same-run PASS `data-evidence` row: full refresh, persist and positive named canaries,
    plus independent shipped-artifact fidelity sign-off. Only a brief with
    `fallback_authorization: model_only_unvalidated` permits model-only fallback; that result remains
-   **UNVALIDATED**, never `DATA_OK` or validated report data.
+   **UNVALIDATED**, never `DATA_OK` or validated report data. Once its basic connections and table
+   definitions exist, require human Refresh and Save rather than leaving an unexplained connectivity
+   blocker. Manual confirmation never fabricates the native evidence needed for advanced COMPLETE.
 
 ## Notes / gotchas
 

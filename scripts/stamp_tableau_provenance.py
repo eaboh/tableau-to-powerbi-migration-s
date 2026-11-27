@@ -69,6 +69,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parse_tableau  # noqa: E402  # pylint: disable=wrong-import-position
 from object_identity import RevisionKey, revision_key  # noqa: E402  # pylint: disable=wrong-import-position
 from tableau_env import pat_secret, redact, resolve_env, scrub_tree  # noqa: E402  # pylint: disable=wrong-import-position
+from tableau_inventory import InventoryError, collect_inventory  # noqa: E402  # pylint: disable=wrong-import-position
 
 LOG = logging.getLogger("provenance")
 
@@ -704,14 +705,16 @@ def classify_inventory(facts: dict[str, int | None]) -> InventoryCompleteness:
     if page.page_number is not None and page.page_number > 1:
         complete = (
             page.total_available == page.returned_count
-            and page.page_size == INVENTORY_PAGE_SIZE
-            and page.page_number == (page.returned_count + INVENTORY_PAGE_SIZE - 1) // INVENTORY_PAGE_SIZE
+            and page.page_size is not None
+            and page.page_size > 0
+            and page.page_number == (page.returned_count + page.page_size - 1) // page.page_size
         )
         return page._replace(status="complete" if complete else "cannot_establish")
+    invalid_size = page.page_size is not None and page.page_size <= 0
     if (
         page.returned_count > facts["requested_page_size"]
         or page.page_number not in (None, 1)
-        or page.page_size not in (None, facts["requested_page_size"])
+        or invalid_size
         or (page.total_available is not None and page.total_available < page.returned_count)
     ):
         return page
@@ -872,9 +875,11 @@ class TableauLookup:  # pylint: disable=too-many-instance-attributes
             try:
                 self._inventory = self._fetch_workbooks()
             except Exception as exc:  # pylint: disable=broad-exception-caught
+                if isinstance(exc, InventoryError):
+                    exc = ValueError(str(exc))
                 self._inventory_failure = exc
                 self.reporter.inventory_failed()
-                raise
+                raise exc
         return self._inventory
 
     def _fetch_workbooks(self) -> list[dict[str, Any]]:
@@ -883,36 +888,16 @@ class TableauLookup:  # pylint: disable=too-many-instance-attributes
         return rows
 
     def _workbook_inventory(self) -> tuple[list[dict[str, Any]], InventoryCompleteness]:
-        rows, page = self._workbook_page(1)
-        if not (
-            page.invalid_fields == 0
-            and page.page_number == 1
-            and page.page_size == INVENTORY_PAGE_SIZE
-            and page.total_available is not None
-            and page.total_available > INVENTORY_PAGE_SIZE
-            and len(rows) == INVENTORY_PAGE_SIZE
-        ):
-            return rows, page
-        total = page.total_available
-        seen = self._workbook_luids(rows)
-        last_page = (total + INVENTORY_PAGE_SIZE - 1) // INVENTORY_PAGE_SIZE
-        for number in range(2, last_page + 1):
-            more, observed = self._workbook_page(number)
-            if (
-                observed.invalid_fields
-                or observed.page_number != number
-                or observed.page_size != INVENTORY_PAGE_SIZE
-                or observed.total_available != total
-                or len(more) != min(INVENTORY_PAGE_SIZE, total - len(rows))
-            ):
-                raise ValueError("inconsistent workbook inventory page")
-            luids = self._workbook_luids(more)
-            if seen & luids:
-                raise ValueError("repeated workbook inventory page identity")
-            seen.update(luids)
-            rows.extend(more)
-        aggregate = page._replace(returned_count=len(rows), page_number=last_page)
-        return rows, classify_inventory(aggregate.facts())
+        def fetch(path):
+            if self.reporter.cancelled:
+                raise RuntimeError(CANCELLED_CODE)
+            status, payload = self._call("GET", path, accept="application/json")
+            if status != 200:
+                raise RuntimeError(f"listing workbooks failed: HTTP {status}")
+            return _rest_json(payload)
+
+        rows, counts = collect_inventory(fetch, f"/sites/{self.site_id}/workbooks", "workbooks", "workbook")
+        return rows, _inventory_completeness(len(rows), counts)
 
     @staticmethod
     def _workbook_luids(rows: list[dict[str, Any]]) -> set[str]:
@@ -1098,22 +1083,15 @@ class TableauLookup:  # pylint: disable=too-many-instance-attributes
         return outcome, acquisition
 
     def _query_published_dependency(self, content_url: str, acquisition: dict) -> dict:
-        query = urlencode({"filter": f"contentUrl:eq:{content_url}", "pageSize": INVENTORY_PAGE_SIZE, "pageNumber": 1})
-        document = self._dependency_json(f"/sites/{self.site_id}/datasources?{query}")
-        rows = document["datasources"].get("datasource", [])
-        rows = ([rows] if rows else []) if isinstance(rows, dict) else rows
-        if not isinstance(rows, list) or any(
-            not isinstance(row, dict) or row.get("contentUrl") != content_url for row in rows
-        ):
+        query = urlencode({"filter": f"contentUrl:eq:{content_url}"})
+        rows, counts = collect_inventory(
+            self._dependency_json, f"/sites/{self.site_id}/datasources?{query}", "datasources", "datasource"
+        )
+        if any(row.get("contentUrl") != content_url for row in rows):
             raise ValueError("invalid published dependency candidates")
-        page = _inventory_completeness(len(rows), document.get("pagination"))
+        page = _inventory_completeness(len(rows), counts)
         acquisition["catalog"] = page.facts()
-        if not (
-            page.status == "complete"
-            and page.page_number == 1
-            and page.page_size == INVENTORY_PAGE_SIZE
-            and page.total_available == len(rows)
-        ):
+        if page.status != "complete":
             raise ValueError("published dependency catalog incomplete")
         if not rows:
             # A filtered search can lag a current datasource even for an administrator.

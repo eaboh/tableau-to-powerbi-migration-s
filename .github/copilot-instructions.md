@@ -18,13 +18,18 @@ powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1 -Update -CheckUps
 If recovery is allowed, retry the **exact originating command and arguments**; this session-start
 call retains `-Update -CheckUpstream`. Do not run policy diagnostics first.
 
-Nonzero preflight blocks agent/Desktop work; use its repair hints.
+Nonzero preflight requires native findings and a human decision; engine-readiness findings may be
+accepted as unused only on the simple route. Authorization, credentials, privacy, custody,
+unsaved-state and authoring-tool safeguards remain mandatory; never bypass structural refusals.
 Migration-start preflight is **plain**; no tooling upgrades mid-migration.
 Setup details live in [runbook §1.1](../docs/operator-runbook.md#11-tooling).
 
 ## Everything else
 
-Read [`/AGENTS.md`](../AGENTS.md): front door → one intake → private v2 brief → task-tool
-dispatch of `@tableau-migrator` → independent Tableau comparison before done.
+Read [`/AGENTS.md`](../AGENTS.md): explicit single/batch and modernization/1:1 intake → scoped
+assessment (optional for single) → harvest/local parse + provenance → Tableau oracle → semantic
+builder when needed → report builder → advisory independent comparison. Resume the same run and
+persist human decisions. The default requires no engine bundle/package gate; advanced routes retain
+their existing authorities. Supplied PBIPs/connection examples stay read-only; no inferred consent.
 Contributor process lives in [CONTRIBUTING.md](../CONTRIBUTING.md); navigate with
 [docs/INDEX.md](../docs/INDEX.md).

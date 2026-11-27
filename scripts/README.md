@@ -8,7 +8,9 @@ Conventions: Python first (`.ps1` only where Windows-specific APIs make it unavo
 `purpose:` / `usage:` header docstring in every file, `ruff` + `pylint` clean. See
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-This catalog is the advanced and implementation reference. Ordinary migrations follow the core commands in [`docs/INDEX.md`](../docs/INDEX.md#start-here-for-a-migration-unit); every script's tier lives in the [script capability inventory](../docs/agent-capability-wiring.md#script-capability-inventory).
+This catalog covers the default simple handoff plus advanced and internal implementation.
+Ordinary migrations follow [`docs/INDEX.md`](../docs/INDEX.md#start-here-for-a-migration-unit);
+every script's tier lives in the [script capability inventory](../docs/agent-capability-wiring.md#script-capability-inventory).
 
 ## Repository automation
 
@@ -18,7 +20,8 @@ This catalog is the advanced and implementation reference. Ordinary migrations f
 
 ## Run every session / every migration
 
-At session start, run the direct command first:
+At Windows session start, run the direct command first (Linux contributors may inspect,
+author and run portable tests offline, not migrations/credentials/Desktop):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\preflight.ps1 -Update -CheckUpstream
@@ -28,6 +31,10 @@ powershell -ExecutionPolicy Bypass -File scripts\preflight.ps1 -Update -CheckUps
 [preflight cannot start](../docs/operator-runbook.md#preflight-cannot-start).
 If recovery is allowed, retry the **exact originating command and arguments**: retain
 `-Update -CheckUpstream` for session start; a migration-start call stays plain. No policy pre-check.
+On the simple route, an engine-related native readiness finding may be explicitly accepted
+for continuation without running the engine; retain the finding and limitation. Safety,
+authoring-tool, credential/dialog and unsaved-state failures still stop work. Never update
+tools mid-migration.
 
 | Script | What it does | When |
 |---|---|---|
@@ -35,24 +42,114 @@ If recovery is allowed, retry the **exact originating command and arguments**: r
 
 ### Run setup
 
-For a live Tableau Server/Cloud site, the recommended pre-bundle route is
-`python -B scripts\start_migration.py [--project <name-or-LUID>] [--workbook <name-or-LUID>]`.
-Invoke it directly; do not pre-allocate a run for live-site invocations.
-One invocation is one run; use one site/environment per invocation. It allocates under the toolkit's
-repo-local `_runs/` by default; `--runs-parent <short-parent>` is an explicit alternative. It runs
-survey, site-wide assessment, scoped harvest, Tableau reference capture, then the bundle, reading
-their JSON/SQLite artifacts rather than treating console text as proof. Child stdout/stderr remain
-live. Oracle failure is reported but does not suppress the bundle attempt. Exit 0 means only that the
-bundle and references were captured for the supported scope—not fidelity, START_READY, COMPLETE or
-deployability. Compare the shipping report with Tableau, then give the printed handover/reference
-paths to the root dispatcher for an issued brief and `@tableau-migrator` handoff. Datasource-only
-project scopes are not supported by this workbook-centric front door.
+`python -B scripts\start_migration.py` and installed `t2p start` default to **simple/v1**:
+explicit intake → exact scope resolution → optional scoped assessment → source harvest,
+local parse/provenance and published dependencies → Oracle → needed semantic work →
+report authoring → independent advisory comparison. No engine survey, Admin Insights,
+conversion, engine bundle, package, START_READY or COMPLETE prerequisite is introduced.
+
+```powershell
+t2p start --mode single --style one-to-one --numeric required `
+    --workbook '<exact-workbook-LUID>' --assessment skip --session-id '<real-session-UUID>'
+t2p start --mode batch --style modernize --numeric none --project '<exact-project-name-or-LUID>' `
+    --design '<private-human-approved-design>' --session-id '<real-session-UUID>'
+t2p start --mode single --style one-to-one --numeric none `
+    --local '<private-workbook.twbx>' --assessment skip
+t2p status --run '<absolute-run>' --json
+```
+
+`--mode single|batch`, `--style one-to-one|modernize` and `--numeric none|required`
+are explicit choices, not inferred defaults. Single requires one selected workbook and
+`--assessment skip|run`; batch assesses the exact project-scoped selection (no implicit
+child projects or site-wide assessment). Repeat `--workbook` for an explicitly selected
+subset, or `--local` for local fixtures. Local parse/provenance needs no PAT; server
+assessment/Oracle absence remains a finding, not fabricated evidence. All Tableau calls
+use PAT configuration from environment or the ignored `--env` file, never secret arguments.
+Modernization report authoring requires `--design` with a human-approved design.
+`--refresh-strategy uia|operator` defaults to `uia`; operator is a human handoff.
+
+Invoke once; do not pre-allocate or silently widen scope. Allocation is repo-local `_runs/`
+by default, with `--runs-parent <parent>` opt-in. One selected workbook means one report/unit,
+including batch runs; published datasources are prepared as dependencies, not merged reports.
+The private `simple-brief/v1` brief is written at
+`<absolute-run>/assessment/briefs/UNIT/migration-brief.md`, and authoring uses
+`<absolute-run>/deliverables/UNIT`. Inputs remain read-only.
+
+### Simple mappings, decisions and task records
+
+- `--pbip WORKBOOK_KEY=path` (repeatable) supplies an explicit existing PBIP per
+  selected workbook key (or its exact LUID). With no mapping, author greenfield.
+  Missing mappings in a partially supplied batch need an explicit human choice.
+  Copies are run-owned and exclusive; never overwrite originals or authored destinations.
+- `--connection-example <PBIP>` inspects actual M/TMDL connections **read-only**,
+  not a visual template. `--target WORKBOOK_KEY:server=value` (also `warehouse`,
+  `database`, `schema`; repeatable) routes explicit connection mappings to the
+  semantic owner only. No guessed target or automatic connection rewrite.
+  An explicitly supplied replacement example is accepted on same-run resume only
+  before successful connection inspection and before any unit's working handoff.
+  Prior example paths remain in private `run.json` history; the replacement still
+  passes all normal inspection safeguards. Used examples remain immutable.
+- `--resume <absolute-SAME-run>` reuses recorded intake, selected environment file,
+  mappings and successful source preparation. It does not allocate, move, widen scope
+  or restart everything. Retry only the affected finding.
+- Use returned finding IDs in `--decision ID=retry|replace|skip|continue|accept`.
+  Conflicting workbook-key/LUID mappings are never resolved by first match. Correct mappings before
+  their unit's working copy exists; use `mapping:KEY=skip` or `target:KEY:FIELD=skip` to explicitly
+  leave an unused mapping unapplied. Applied copies stay immutable on resume. An explicit builder
+  retry reissues its task without deleting the previous native result or authored artifacts.
+  Only offered choices are applicable; `--replacement ID=<private-path>` provides
+  an authorized human replacement. Native errors/absence and accepted limitations
+  remain visible. Authorization/sign-in/dialog, structural custody/privacy and
+  authoring unsaved-state safeguards cannot be waived.
+  Native diagnostics stay in private `scratch/` logs; retry of existing failed
+  output uses a separate attempt folder, never overwrites earlier evidence.
+- Report authoring without a warm `.pbi/cache.abf` requires the explicit
+  `--decision cache:UNIT=continue`; disclose unverified data. That is permission
+  for offline authoring, not evidence of refresh, rows or persistence.
+
+Returned `kind: task` actions name the owning `pbi-semantic-builder` (only when needed),
+`pbi-report-builder`, then read-only `pbi-migration-validator`. The dispatcher invokes
+the task tool with the exact run/unit/brief/working paths; Python never invokes agents.
+Record the real task outcome in a private run-owned JSON file, then resume:
+
+```powershell
+t2p start --resume '<absolute-SAME-run>' `
+    --record 'UNIT:semantic=<absolute-SAME-run>/scratch/semantic-result.json'
+```
+
+`--record UNIT:semantic|report|comparison=path` accepts `state`
+`authored|findings|failed|compared` and `native_exit_code` (native integer, or null
+when no native process ran). Preserve findings/failures instead of inventing success.
+Optional `artifacts` are existing **run-relative** paths: semantic may record
+`semantic_model`/`project_file`, report may record `report`/`project_file`;
+comparison cannot author artifacts. For example:
+
+```json
+{"state":"authored","native_exit_code":0,"artifacts":{"semantic_model":"deliverables/UNIT/Report.SemanticModel"}}
+```
+
+Comparison is advisory: retain discrepancies, route repairs to their layer, and
+explicitly accept or skip unverified scope, never self-issue a fake pass/COMPLETE.
+`t2p --json` start/status exposes `route`, `stages` and `human_actions`. Direct simple
+start exits 0 for returned task actions/no pending human action, 3 for human actions,
+1 for an operation refusal; these are not fidelity verdicts. Linux portable tests
+do not establish live PAT access, Desktop refresh/persistence or visual/numeric fidelity.
+Deployment requires separate approval.
+
+### Explicit advanced setup
+
+`python -B scripts\start_migration.py --advanced [--project <name-or-LUID>] [--workbook <name-or-LUID>]`
+or `t2p start --advanced --project <name-or-LUID>` retains survey, site-wide assessment,
+scoped harvest, Oracle and conversion. Oracle failure still permits the bundle attempt.
+Its exit 0 remains capture-only, not fidelity, START_READY, COMPLETE or deployment.
+Advanced v2 briefs and package/check/promote authorities below are unchanged.
 
 The explicit assessment-only pre-step is `t2p assess [--env PATH] [--runs-parent PATH] [--session-id UUID]`
-or, for experts, `python -B scripts\start_migration.py --assess-only`. It allocates one site-wide
+or, for experts, `python -B scripts\start_migration.py --advanced --assess-only`. It allocates one site-wide
 assessment run, surveys and assesses the site, attempts Admin Insights aggregates, and writes one
 offline HTML report. It stops before harvest, reference capture, packaging or conversion; it is not
-migration readiness. `t2p start --project <name>` creates a new run and repeats survey/assessment.
+migration readiness. `t2p start --advanced --project <name>` creates a new run and repeats
+survey/assessment; default simple start does not reuse this assessment-only run.
 
 ### Expert and recovery setup
 
@@ -60,7 +157,7 @@ Reference capture follows REST pagination for both workbook and view inventories
 the requested workbook filters and view limit. A failed, incomplete or inconsistent later page
 refuses capture rather than treating a truncated inventory as complete.
 
-For new local folders, workbooks or datasources, before stage writes run
+For explicitly advanced/manual local folders, workbooks or datasources, before stage writes run
 `python -B scripts\work_dirs.py <slug> --json`; external roots add
 `--runs-parent <parent>` (`--repo-root` alias). Allocation auto-attempts ignored
 `_MIGRATION.md`; a warning does not undo success.
@@ -76,13 +173,21 @@ Do not ask the human to generate the note.
 
 ## Migration pipeline
 
+The default front door and its internal helpers are listed first. The remaining producer,
+package and checker descriptions apply to explicit advanced/manual operations, not simple/v1
+completion prerequisites.
+
 | Script | What it does | Called by |
 |---|---|---|
-| `start_migration.py` | The recommended live-site pre-bundle front door: one site/project/workbook scope, one allocated `_runs/<NNN>-<slug>/`, five direct-output producer stages, artifact-based scope checks, a retained bundle attempt after reference failure, and an explicit handoff. Exit 0 is capture-only, never fidelity or readiness. Use `--runs-parent` only for a new shorter-root run after a path refusal; existing runs are never relocated. | Operator/root dispatcher, before `@tableau-migrator` |
+| `start_migration.py` | Default simple/v1 intake, exact scope, optional scoped assessment, source/Oracle preparation and human/task actions; same-run resume and explicit mappings. `--advanced` retains the five-stage conversion route and `--advanced --assess-only` retains separate assessment-only operation. Never certifies fidelity. | Operator/root dispatcher |
+| `simple_migration.py` | Internal simple/v1 owner: persists intake, stages, native findings, decisions, simple-brief/v1 briefs and per-unit task outcomes; never invokes agents or engine/package gates. | `start_migration.py` |
+| `prepare_tableau_source.py` | Internal selection/harvest/local parse/provenance and dependency preparation. Successful source artifacts are reused; authorized replacements have separate custody paths. No engine invocation or connectivity/fidelity certification. | Simple front door |
+| `simple_pbip.py` | Internal read-only actual-connection inspection and exclusive run-owned copies of supplied PBIPs; no model/report emission, connection rewriting, refresh or fidelity certification. | Simple front door |
+| `tableau_inventory.py` | Internal complete REST and Metadata pagination, exact project/workbook selection and ambiguity refusal; no implicit child-project widening. | Source preparation and scoped inventory consumers |
 | `parse_tableau.py` | The deterministic parser: `.twb`/`.twbx`/`.tds`/`.tdsx` → `migration-spec.json`, validated against `docs/migration-spec.schema.json`. The contract every downstream agent reads. It flags prompt-injection-shaped untrusted workbook text in `limitations_encountered`; content is disclosed, never silently rewritten. | Once per workbook, before any agent work |
 | `prompt_injection.py` | Scans untrusted Tableau-derived contract text for high-precision prompt-injection shapes and returns high-severity disclosure limitations. Detection is deliberately not sanitisation, preserving customer source evidence. | Called by `parse_tableau.py` |
-| `admin_insights_collector.py` | Internal assessment-only child that requests one aggregate for the uniquely identified top-level Admin Insights `TS Events` datasource. It persists only allowlisted aggregate fields; the VDS endpoints and shapes remain assumed and are not live-qualified. | `start_migration.py --assess-only` |
-| `assessment_report.py` | Internal assessment-only reader/renderer: validates the producer's fixed survey, JSON and read-only SQLite evidence, then atomically writes a deterministic, self-contained offline HTML report. It does not call Tableau or certify migration readiness. | `start_migration.py --assess-only`, `run_status.py` |
+| `admin_insights_collector.py` | Internal advanced assessment-only child that requests one aggregate for the uniquely identified top-level Admin Insights `TS Events` datasource. It persists only allowlisted aggregate fields; the VDS endpoints and shapes remain assumed and are not live-qualified. Not run by simple/v1. | `t2p assess`, `start_migration.py --advanced --assess-only` |
+| `assessment_report.py` | Internal local assessment reader/renderer: validates JSON/read-only SQLite evidence and writes a self-contained offline HTML report. Advanced assessment-only uses existing survey evidence; simple scoped assessment explicitly uses `--without-survey`. Neither report certifies migration readiness. | Assessment front doors, `run_status.py` |
 | `build_migration_feedback.py` | Offline, hash-pinned private evidence builder for the repo-local `migration-feedback` skill. Validates recorded identity, canonical fresh-output receipts and controls; emits a strict public-safe `issue-payload.json`, never publishes or reruns anything. No default output outside a selected run. [Input/output contract](#migration-feedback-phase-1). | Internal implementation helper for the feedback skill, not a second diagnostics exporter |
 | `preflight_source_credentials.py` | Read-only classification of live/local/review sources with no network in `--spec` mode. Classification is not connectivity proof; follow `live-source-reachability` for static checks and the shipped-artifact automatic-source refresh procedure. The separate `--model` service datasource/refresh check remains available and needs Fabric authentication. | `parse_tableau.py`, at parse time |
 | `migration_bundle.py` | Shared contract reader for parser `migration-spec.json` or deterministic-engine bundles (`report.json` + `handover/*.json`): migration root, explicit sources and published-datasource keys, never a fabricated spec. Defines receipt-backed engine output roots (`pbip/`, `reports/`, `semantic_models/`, `data/`) and engine provenance for bundle/package evidence checks. | source classification, package/evidence tools, `published_datasource_registry.py` |
@@ -1219,7 +1324,7 @@ dialog and can make a healthy bridge look broken.
 | `tmdl_checks.py` | Library half of `check_datamodel.py` (no CLI): the text-side TMDL checks — duplicate scalar properties, measure/column name collisions, empty measure expressions, compact CALCULATE filters, BOM/decoding. Whether a document PARSES deliberately lives in `tmdl_oracle.py` instead. Run it via `check_datamodel.py`. |
 | `tmdl_oracle.py` | Library half of `check_datamodel.py` (no CLI): the TMDL **oracle** (#254). Hands each model to `TmdlSerializer.DeserializeDatabaseFromFolder` (AMO 19.84.1, via `tools/tmdl_oracle/`) — the parser Power BI Desktop itself uses — so a layout the parser refuses is reported as `TMDL_PARSER_REJECTED` with its own document and line, instead of being guessed at by a re-implemented grammar that three attempts could not make false-positive-free. It checks the helper's reported AMO version against the pin in `tmdl_oracle.csproj`, because a verdict is only as good as the parser behind it. Silent absorption is deliberately out of scope and undecidable from the parse (issue #404). Needs the .NET SDK. Run it via `check_datamodel.py`. |
 | `check_desktop_orphans.py` | Run-owned Desktop leak gate: reads a unit's `.desktop-instance-audit.log`, compares recorded PIDs plus process start times to live `PBIDesktop.exe`, and fails only when a process this unit opened is still alive without a `desktop-kept` handoff. |
-| `check_bundle_sources.py` | Offline, credential-free source checks on an emitted PBIP bundle, run before the live refresh: a referenced M parameter that is undefined (`M_PARAM_UNDEFINED`) or defined but blank (`M_PARAM_EMPTY`), and with `--spec <migration-spec.json>` a set of declared live endpoints the model cannot reach (`SOURCE_COLLAPSED`, upstream #91: two declared servers emitted as one refresh cleanly and read the wrong data). Without `--spec`, coverage prints `SOURCE_COVERAGE: UNKNOWN`, never OK. Exit 0 no finding / 1 finding or no `*.SemanticModel/definition` / 2 bundle missing. |
+| `check_bundle_sources.py` | Offline, credential-free source checks on an emitted PBIP bundle, run before the live refresh: a referenced M parameter that is undefined (`M_PARAM_UNDEFINED`) or defined but blank (`M_PARAM_EMPTY`), and with `--spec <migration-spec.json>` a set of declared live endpoints the model cannot reach (`SOURCE_COLLAPSED`, upstream #91: two declared servers emitted as one refresh cleanly and read the wrong data). Parameter references come only from M expressions/partitions, not DAX, comments or string literals; incomplete token scans refuse with `M_SCAN_ERROR`. Without `--spec`, coverage prints `SOURCE_COVERAGE: UNKNOWN`, never OK. Exit 0 no finding / 1 finding or no `*.SemanticModel/definition` / 2 bundle missing. |
 | `check_empty_model.py` | Offline gate against a model that opens and loads **zero rows**: classifies every emitted TMDL partition and blocks (`run_estate.py` exit 6, `EXIT_EMPTY_MODEL`) on an Import over a flat file that is missing, foreign-path, or empty. Never judges live/DirectQuery, remote imports, calculated tables, or needs-review stubs. |
 | `check_connection_fidelity.py` | **Cross-artifact** gate (#328) against a **silent live-to-flat-file downgrade**: a Tableau source that must connect to a live upstream system whose shipped model instead reads a CSV/Excel/inline file, so it can never refresh and freezes the customer's data at export time. **A pass requires PROVEN provenance, not a connector name.** `partition_provenance` requires the **complete** source expression to be one top-level `let … in <identifier>` (no nested `let`, no leading branch), then walks backwards through `name = expr` bindings demanding the engine's canonical shape: one connector-call root, pure navigation steps, and **at most one** `Value.NativeQuery` whose first argument is a **usable** handle — a collection-returning root such as `Snowflake.Databases` must be drilled first, which `storage_mode.py` documents. **Every step must consume its whole binding** (balanced-delimiter matching): a native query concatenated with inline rows, or `Sql.Database(…) = null`, is a prefix match and is refused. This is reachability, not an M interpreter — no operator precedence, no types, no evaluation. It exists because *attribution is not provenance*: knowing which table belongs to a source never established which expression supplies its rows, and a connector token in a string literal, an unused lazy binding, an unreachable `else let …` branch, a native query on a root collection, and a zero-row query concatenated with `#table` all certified rows that came from somewhere else. Measured over both real bundles (280 partitions, 8 shapes, 49 live): every generated live partition matches, so the shape gate **costs zero passes**. Anything hand-edited is `NOT_CHECKED`. Reads **both migration tiers** (#366): a parser `migration-spec.json` unit and an **engine datasource unit** (`report.json` → `datasources[]`, carrying real `tables`) are judged per declared table (`SCOPE_TABLE`); an **engine workbook unit** carries only a `table_count`, so at `SCOPE_MODEL` the gate emits a **finding or a refusal, never a pass** — a capability ceiling, closable only by per-table provenance (upstream `tableau-fabric-skills` #182). A finding still fires there: "no such connector anywhere **and** rows come off disk" needs no attribution. **`report.json` is the coverage census** — validated for structure, not just parseability; slices never replace it; an unreadable/malformed census, an unreadable slice, and two units sharing a name are all `not_evaluated`, never a silent shrink. Bundle dir, `report.json` and a direct slice report **identical coverage**. A `sqlproxy` workbook is a **pointer** naming the datasource unit to check; an unresolvable source gets its own `NOT_CHECKED` verdict and is never dropped. ⚠️ It does **not** flag flat files as such — at model scope a file-backed partition a declared flat-file sibling could own is `NOT_CHECKED`, not a finding. **A `SKIPPED` unit says which kind it is** (`[nothing to check]` vs `[NOT EVALUATED]`) and every verdict prints `COVERAGE: n of m unit(s) examined`. Measured on a real 52-unit estate: 7 datasource units examined and clean (6 Snowflake, 1 Databricks), 30 workbooks `nothing_to_check` (all-flat-file, zero false), 15 `not_evaluated`. Exit 0 pass / 1 findings / 3 skipped. | `pbi-semantic-builder`, and `check_unit --scope integration` |
 | `check_sqlproxy_connections.py` | Offline gate (#282) against shipped semantic models that still contain Tableau published-datasource proxy parameters. Reads `definition/expressions.tmdl` only, keys on `Server_sqlproxy*` / `Database_sqlproxy*` names (not `localhost`), and reports each pair because `Database_sqlproxy*` names the published datasource that must be migrated or rebound. Exit 0 clean / 1 sqlproxy connection present / 3 no semantic model measured. Native engine `report.json` workbooks with `binding_signal.secondary_datasources` and `pbip_status: built` are surfaced as non-blocking warnings: at-risk telemetry, not proof that the shipped model is broken. |
@@ -1293,8 +1398,9 @@ rebuild the artifact after editing its source.
 | `make_seed_workbook.py` | Builds the ~1.8 KB self-contained `.twbx` that `provision_tableau_estate.py seed` publishes: one CSV, one worksheet, one dashboard. Exists because **an empty project is an inert fixture** — the trial site's 11-deep `ZZ Deep` chain and every deliberately hostile project name (`R/D`, `R+D`, `Trailing dot.`, `Ventes françaises`) held nothing, so the path handling they were built to stress was never exercised. Two non-obvious requirements, both measured against Tableau Cloud: a `<windows>` entry per sheet (or publish fails *"not associated with any window"*), and `<metadata-records>` for every column (without them the engine cannot type a model and the whole estate comes back `DOD_FAILED, bound=0/N`). Every attribute in the template is **single-quoted**, so names are escaped with quotes included — `saxutils.escape` alone covers only `&`/`<`/`>`, and a project named `L'Équipe` stopped the file being XML. Sheet names truncate the **raw** base then append the suffix: slicing an escaped string splits entities, and composing first made the worksheet and dashboard collide at 54 characters. The internal `.twb` entry name is sanitised, decoupled from the display name, so a `/` in the name cannot create a directory inside the archive. | called by `provision_tableau_estate.py seed` |
 ## Narrow `t2p.py` pilot (Refs #749 / #773)
 
-This opt-in pilot does not replace direct scripts, dispatcher guidance or gates. The frozen
-[pilot plan](../docs/t2p-pilot-plan.md) supersedes the earlier consensus's path timing and exit names.
+The facade does not replace dispatcher task tools or advanced gates. Default `start` now
+uses the [simple route](#run-setup). The frozen [pilot plan](../docs/t2p-pilot-plan.md)
+describes historical advanced start/path behavior, not the current default.
 The [operator setup](../docs/operator-runbook.md#start-here) installs only this existing facade as module `t2p`
 (`t2p:console_main`), using a **regular local-directory** pip/uv install. Its standard installer
 metadata binds the selected environment to one physical toolkit checkout; backend scripts/assets
@@ -1303,7 +1409,10 @@ are not packaged or selected from caller cwd. Use that environment's absolute ge
 
 ```text
 t2p doctor [--env <path>] [--json]
-t2p start --project <exact-name|LUID> [--env <path>] [--runs-parent <path>] [--storage-decision <path>] [--session-id <UUID>] [--json]
+t2p start --mode single|batch --style one-to-one|modernize --numeric none|required [--project <exact-name|LUID>] [--workbook <exact-name|LUID>] [--local <path>] [--assessment skip|run] [--env <path>] [--runs-parent <path>] [--session-id <UUID>] [--json]
+t2p start --resume <absolute-SAME-run> [--decision ID=CHOICE] [--replacement ID=path] [--record UNIT:semantic|report|comparison=path] [--json]
+t2p start --advanced --project <exact-name|LUID> [--env <path>] [--runs-parent <path>] [--storage-decision <path>] [--session-id <UUID>] [--json]
+t2p assess [--env <path>] [--runs-parent <path>] [--session-id <UUID>] [--json]
 t2p status --run <absolute-local-run> [--json]
 t2p units {list | show <id> | find [--name <text>] [--luid <luid>]} [--runs-parent <path>] [--json]
 t2p refresh <pbip-or-folder> [--canaries <table> ...] [--no-save] [--json]
@@ -1355,7 +1464,10 @@ The direct `-B` expert forms remain:
 
 ```text
 python -B scripts/t2p.py doctor [--env <path>] [--json]
-python -B scripts/t2p.py start --project <exact-name|LUID> [--env <path>] [--runs-parent <path>] [--storage-decision <path>] [--session-id <UUID>] [--json]
+python -B scripts/t2p.py start --mode single|batch --style one-to-one|modernize --numeric none|required [--project <exact-name|LUID>] [--workbook <exact-name|LUID>] [--local <path>] [--assessment skip|run] [--json]
+python -B scripts/t2p.py start --resume <absolute-SAME-run> [--decision ID=CHOICE] [--record UNIT:semantic|report|comparison=path] [--json]
+python -B scripts/t2p.py start --advanced --project <exact-name|LUID> [--env <path>] [--runs-parent <path>] [--storage-decision <path>] [--session-id <UUID>] [--json]
+python -B scripts/t2p.py assess [--env <path>] [--runs-parent <path>] [--session-id <UUID>] [--json]
 python -B scripts/t2p.py status --run <absolute-local-run> [--json]
 python -B scripts/t2p.py units {list | show <id> | find [--name <text>] [--luid <luid>]} [--runs-parent <path>] [--json]
 python -B scripts/t2p.py refresh <pbip-or-folder> [--canaries <table> ...] [--no-save] [--json]
@@ -1395,7 +1507,13 @@ checked; only the exact selected cache file may appear/change. Empty means **NOT
 cache relocation proof or a failure by itself. Same-basename protected writes still fail; no profile
 or installed-command directory/no-pyc snapshot exemption is introduced.
 
-`start` delegates **one** existing `start_migration.py` owner, including its output guard, allocator,
+`start` delegates **one** `start_migration.py` owner. Default simple/v1 retains its
+output guard, allocator and native human/task actions; [run setup](#run-setup) owns
+its intake/resume/records. JSON exposes route, stages and human_actions without
+invoking agents or certifying fidelity. `--storage-decision` is advanced-only;
+simple flags conflict with `--advanced`.
+
+**Explicit advanced `start --advanced` only:** the existing owner retains its output guard, allocator,
 site-wide assessment, post-harvest/pre-conversion path gate and reference-failure bundle continuation.
 Initial path decision is `cannot_establish` / `unknown_until_harvest`, at either root. No root-only PASS,
 relocation, guessed number or facade path scanner. Preserve wrapper exits 0/1/3/130; stage native codes
@@ -1410,6 +1528,9 @@ so that relative policy resolves there, not at caller cwd. Packaging does not si
 
 Ordinary `status` is a **local operator view** of the owner's projection (#843); `--json` stays
 `t2p/v1` with additive fields only (syntax/error/interrupt envelopes are byte-for-byte unchanged).
+For simple/v1 runs, it reports selected workbook units, run-owned working paths,
+native stages, limitations and `human_actions`; it never resumes or certifies them.
+The detailed engine/package projection below applies to **advanced runs**.
 After the status/exit header, five consecutive lines explain Goal (this inspection), Now, Observed
 handoff, Need and Existing owner. A **Units** table then shows each unit's ID (from `unit-index.json`)
 or `-`, kind, original name, stage (`reported|converted|packaged|not_started`) and working package

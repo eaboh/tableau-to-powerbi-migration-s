@@ -185,7 +185,7 @@ def test_a_dead_sign_in_transport_degrades_to_fingerprints_without_the_pat(tmp_p
     _twbx(tmp_path)
 
     class DeadOpener:
-        def open(self, _request, timeout):  # noqa: ARG002
+        def open(self, _request, timeout):
             raise urllib.error.URLError(f"refused {LIVE_ENV['TABLEAU_PAT_SECRET']}")
 
     monkeypatch.setattr(prov.urllib.request, "build_opener", lambda *_handlers: DeadOpener())
@@ -442,7 +442,12 @@ class RecordingSite(prov.TableauLookup):
         if self._inventory_document is not ...:
             document = self._inventory_document
             return 200, document if isinstance(document, bytes) else json.dumps(document).encode()
-        return 200, json.dumps({"workbooks": {"workbook": self._site_workbooks}}).encode()
+        return 200, json.dumps(
+            {
+                "workbooks": {"workbook": self._site_workbooks},
+                "pagination": {"pageNumber": 1, "pageSize": 1000, "totalAvailable": len(self._site_workbooks)},
+            }
+        ).encode()
 
     def count(self, kind: str) -> int:
         """How many times the site was asked for ``signin`` / ``signout`` / ``inventory`` / ``content``."""
@@ -1227,7 +1232,7 @@ def test_paginated_inventory_rejects_duplicate_identities_within_a_page(page_ind
     rows[11]["id"] = duplicate.upper() if uppercase else duplicate
 
     for _ in range(2):
-        with pytest.raises(ValueError, match="repeated workbook inventory page identity"):
+        with pytest.raises(ValueError, match="repeated identities in inventory pagination"):
             site.workbooks()
     assert site.count("inventory") == page_index + 1
     assert site.inventory_completeness is None
@@ -1272,7 +1277,7 @@ def _build_inventory_page(tmp_path: Path, monkeypatch, row_count: int, paginatio
 def _assert_page_call_budget_and_fingerprints(site: RecordingSite, result: dict, tmp_path: Path) -> None:
     assert (site.count("inventory"), site.count("content")) == (
         1,
-        int(site.inventory_completeness.returned_count > 0),
+        int(site.inventory_completeness is not None and site.inventory_completeness.returned_count > 0),
     ), "PAGINATION_CACHE_BUDGET: completeness changed the one-inventory/one-content-per-LUID contract"
     assert result["input_count"] == len(result["inputs"]) == 3
     for record in result["inputs"]:
@@ -1318,10 +1323,15 @@ def test_one_inventory_page_settles_completeness_within_the_call_budget(
 ) -> None:
     """Only a complete first page lets an absent LUID read as local-only; anything else is a finding."""
     site, result = _build_inventory_page(tmp_path, monkeypatch, row_count, pagination)
-    assert result["phase"] == {"status": "partial" if errors else "success", "errors": errors}
-    assert prov.is_success(result) is not errors
-    note = prov.INCOMPLETE_INVENTORY_NOTE if errors else prov.NO_ORIGIN_NOTE
-    assert result["inputs"][-1]["origin_note"] == note
+    complete = pagination == {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 1000}
+    assert result["phase"]["status"] == ("success" if complete else "partial")
+    assert prov.is_success(result) is complete
+    if complete:
+        assert not result["phase"]["errors"]
+        assert result["inputs"][-1]["origin_note"] == prov.NO_ORIGIN_NOTE
+    else:
+        assert result["phase"]["errors"][0]["code"] == "inventory-failed"
+        assert site._inventory is None
     _assert_page_call_budget_and_fingerprints(site, result, tmp_path)
 
 
@@ -1356,11 +1366,11 @@ def test_malformed_or_contradictory_page_facts_never_prove_a_complete_inventory(
     row_count: int, metadata: object, status: str
 ) -> None:
     site = RecordingSite(LIVE_ENV, inventory_document=_inventory_page(row_count, metadata))
-    assert len(site.workbooks()) == row_count
-    assert site.inventory_completeness.status == status, "MALFORMED_METADATA_NOT_COMPLETE"
-    error = site.inventory_completeness.error()
-    assert all(type(value) is int for field, value in error.items() if field not in {"code", "operation"})
-    assert "private-response" not in json.dumps(error, allow_nan=False)
+    with pytest.raises(ValueError) as error:
+        site.workbooks()
+    assert site.inventory_completeness is None and site._inventory is None
+    assert "private-response" not in str(error.value)
+    assert status in {"cannot_establish", "truncated"}
 
 
 def test_a_nonfinite_page_count_refuses_the_whole_inventory() -> None:
@@ -1375,6 +1385,7 @@ def test_a_nonfinite_page_count_refuses_the_whole_inventory() -> None:
     [({"workbooks": {"workbook": {}}}, 0), ({"workbooks": {"workbook": {"id": "fixture", "name": "Fixture"}}}, 1)],
 )
 def test_rest_empty_and_singleton_collection_shapes_count_rows_not_fields(document: dict, count: int) -> None:
+    document["pagination"] = {"pageNumber": 1, "pageSize": 1000, "totalAvailable": count}
     site = RecordingSite(LIVE_ENV, inventory_document=document)
     rows = site.workbooks()
     assert isinstance(rows, list) and len(rows) == count
@@ -1420,7 +1431,8 @@ def test_inventory_failure_does_not_acquire_a_pagination_state(
 
 
 def test_inventory_rows_and_completeness_share_one_decode_and_one_cache(monkeypatch) -> None:
-    site = RecordingSite(LIVE_ENV, inventory_document=_inventory_page(1000, {"totalAvailable": "1001"}))
+    metadata = {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 1000}
+    site = RecordingSite(LIVE_ENV, inventory_document=_inventory_page(1000, metadata))
     decoded, classified = [], []
     decode, classify = json.loads, prov._inventory_completeness
 
@@ -1439,7 +1451,7 @@ def test_inventory_rows_and_completeness_share_one_decode_and_one_cache(monkeypa
     site._inventory_document = _inventory_page(0, {"totalAvailable": "0"})
     for _ in range(3):
         assert site.workbooks() is rows and site.inventory_completeness is page
-    assert len(decoded) == 1 and classified == [(1000, {"totalAvailable": "1001"})], "ONE_PAGE_ONE_PARSE"
+    assert len(decoded) == 1 and classified == [(1000, metadata)], "ONE_PAGE_ONE_PARSE"
     assert site.count("inventory") == 1
 
 
@@ -1453,7 +1465,7 @@ def test_real_worker_emits_one_raw_parse_outcome_before_content(
     import run_estate as estate  # pylint: disable=import-outside-toplevel
 
     _twbx(tmp_path, "unit")
-    kwargs = {"inventory_document": _inventory_page(1, {"totalAvailable": 1})}
+    kwargs = {"inventory_document": _inventory_page(1, {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 1})}
     kwargs["inventory_document"]["workbooks"]["workbook"][0]["name"] = "unit"
     if failure == "parse":
         kwargs = {"inventory_document": b"{"}
@@ -1476,8 +1488,8 @@ def test_real_worker_emits_one_raw_parse_outcome_before_content(
             "facts": {
                 "returned_count": 1,
                 "requested_page_size": 1000,
-                "page_number": None,
-                "page_size": None,
+                "page_number": 1,
+                "page_size": 1000,
                 "total_available": 1,
                 "invalid_fields": 0,
             },
@@ -1495,26 +1507,24 @@ def test_parent_classifies_raw_facts_even_when_worker_classification_is_wrong(tm
     import run_estate as estate  # pylint: disable=import-outside-toplevel
 
     _twbx(tmp_path, f"{_fixture_luid(0)}_Fixture")
-    expected = "truncated"
-    site = _install(monkeypatch, RecordingSite(LIVE_ENV, inventory_document=_inventory_page(1, {"totalAvailable": 2})))
+    site = _install(
+        monkeypatch,
+        RecordingSite(
+            LIVE_ENV, inventory_document=_inventory_page(1, {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 2})
+        ),
+    )
     classify = prov._inventory_completeness  # pylint: disable=protected-access
     monkeypatch.setattr(prov, "_inventory_completeness", lambda *args: classify(*args)._replace(status="complete"))
     reporter = RecordingReporter()
     result = prov.build(tmp_path, LIVE_ENV, reporter)
     reporter.terminal(result)
-    assert result["phase"] == {"status": "success", "errors": []}, "control must contain the wrong worker verdict"
+    assert result["phase"]["status"] == "partial", "pagination refusal precedes the perturbed classifier"
     state = estate._ProvenanceState(emit=lambda *_args: None)  # pylint: disable=protected-access
-    facts_at = reporter.kinds().index("inventory-facts")
-    for message in reporter.messages[: facts_at + 1]:
+    for message in reporter.messages:
         state.accept(message)
-    assert state.inventory.status == expected, "PARENT_CLASSIFIES_RAW_FACTS"
-    with pytest.raises(estate.ProvenanceProtocolError):
-        for message in reporter.messages[facts_at + 1 :]:
-            state.accept(message)
-    document = state.document(estate.PROVENANCE_PROTOCOL_CODE)
-    assert document["phase"]["errors"][0]["code"] == f"inventory-{expected.replace('_', '-')}"
-    assert not prov.is_success(document)
-    assert (site.count("inventory"), site.count("content")) == (1, 1)
+    assert state.terminal == result and not prov.is_success(result)
+    assert "inventory-failed" in reporter.kinds() and "inventory-facts" not in reporter.kinds()
+    assert (site.count("inventory"), site.count("content")) == (1, 0)
 
 
 def test_pagination_diagnostics_and_progress_never_copy_response_text(tmp_path: Path, monkeypatch) -> None:
@@ -1532,17 +1542,8 @@ def test_pagination_diagnostics_and_progress_never_copy_response_text(tmp_path: 
     for message in reporter.messages:
         state.accept(message)
     assert state.terminal == result
-    assert result["phase"] == {
-        "status": "partial",
-        "errors": [
-            {
-                "code": "inventory-cannot-establish",
-                "operation": "inventory",
-                "returned_count": 1000,
-                "requested_page_size": 1000,
-            }
-        ],
-    }
+    assert result["phase"]["status"] == "partial"
+    assert result["phase"]["errors"][0]["code"] == "inventory-failed"
     rendered = json.dumps({"result": result, "messages": reporter.messages, "progress": emitted}, allow_nan=False)
     assert all(secret not in rendered for secret in secrets), "PAGINATION_DIAGNOSTIC_PRIVACY"
 
@@ -1843,7 +1844,8 @@ def test_published_source_revision_must_be_confirmed(tmp_path: Path, monkeypatch
     site.remote_bytes = _published_xml("AnotherRevision")
     if kind == "incomparable":
         monkeypatch.setattr(site, "content_revision_key", lambda _luid: oid.RevisionKey("raw-sha256-v1", "f" * 64))
-    block = _association(prov.build(path, LIVE_ENV))
+    result = prov.build(path, LIVE_ENV)
+    block = _association(result)
     assert block["source_match"] == "unestablished" and block["rows"][0]["state"] == "cannot_establish"
     assert site.queries() == []
 
@@ -1874,7 +1876,12 @@ def test_published_association_requires_a_uniquely_established_workbook(tmp_path
             "workbooks": {"workbook": site._site_workbooks},
             "pagination": {"pageNumber": 1, "pageSize": 1000, "totalAvailable": 2},
         }
-    block = _association(prov.build(path, LIVE_ENV))
+    result = prov.build(path, LIVE_ENV)
+    if kind == "incomplete-workbooks":
+        assert result["inputs"][0]["origin"] is None
+        assert not prov.is_success(result) and site.queries() == []
+        return
+    block = _association(result)
     assert block["source_match"] == "unestablished" and block["rows"][0]["candidate_count"] is None
     assert site.queries() == []
 
@@ -1941,7 +1948,8 @@ def test_published_real_producer_messages_reconcile_with_supervisor(tmp_path: Pa
 
     path, site = _published_setup(tmp_path, monkeypatch)
     if case == "ambiguous":
-        site.catalog["datasources"]["datasource"] *= 2
+        first = site.catalog["datasources"]["datasource"][0]
+        site.catalog["datasources"]["datasource"].append({**first, "id": _fixture_luid(700)})
         site.catalog["pagination"]["totalAvailable"] = 2
     elif case == "cannot_establish":
         site.catalog_error = TimeoutError("private catalog exception")
@@ -2837,7 +2845,8 @@ def _published_between_inputs(tmp_path: Path, monkeypatch, change: str) -> tuple
             site.catalog["datasources"]["datasource"] = []
             site.catalog["pagination"]["totalAvailable"] = 0
         elif change == "catalog-ambiguous":
-            site.catalog["datasources"]["datasource"] *= 2
+            first = site.catalog["datasources"]["datasource"][0]
+            site.catalog["datasources"]["datasource"].append({**first, "id": _fixture_luid(700)})
             site.catalog["pagination"]["totalAvailable"] = 2
         elif change == "detail-404":
             site.detail_status = 404

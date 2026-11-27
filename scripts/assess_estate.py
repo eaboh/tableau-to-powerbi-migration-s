@@ -101,6 +101,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import resolve_datasource_target as target_resolution  # noqa: E402  # pylint: disable=wrong-import-position
 import tableau_render_capability as render_capability  # noqa: E402  # pylint: disable=wrong-import-position
 from tableau_env import env_source, pat_secret, redact, require, resolve_env, scrub_tree  # noqa: E402  # pylint: disable=wrong-import-position
+from tableau_inventory import (  # noqa: E402  # pylint: disable=wrong-import-position
+    InventoryError,
+    MetadataError,
+    collect_inventory,
+    collect_metadata_workbooks,
+    select_scope,
+)
 
 LOG = logging.getLogger("assess")
 
@@ -472,28 +479,22 @@ class Site:  # pylint: disable=too-many-instance-attributes  # one client: crede
         return self._request_json("GET", path)
 
     def paged(self, path: str, collection: str, item: str) -> tuple[list[dict], dict | None]:
-        """Follow REST pagination to completion -> ``(rows, error)``.
+        """Follow complete REST pagination; failure returns no partial prefix."""
+        failure = None
 
-        A survey that stops at page 1 under-reports. A page that FAILS is worse, and used to be
-        fatal: the rows read so far are returned WITH the error, so the caller reports a partial
-        listing loudly instead of passing a truncated list off as complete.
-        """
-        out: list[dict] = []
-        page = 1
-        while page <= 1000:
-            sep = "&" if "?" in path else "?"
-            payload, error = self._request_json("GET", f"{path}{sep}pageSize=1000&pageNumber={page}")
+        def fetch(page_path):
+            nonlocal failure
+            payload, error = self._request_json("GET", page_path)
             if error:
-                return out, {**error, "page": page}
-            block = (payload or {}).get(collection) or {}
-            rows = block.get(item) or []
-            rows = [rows] if isinstance(rows, dict) else rows
-            out.extend(rows)
-            total = int(((payload or {}).get("pagination") or {}).get("totalAvailable", 0))
-            if not rows or len(out) >= total:
-                break
-            page += 1
-        return out, None
+                failure = error
+                raise InventoryError("inventory request failed")
+            return payload
+
+        try:
+            rows, _facts = collect_inventory(fetch, path, collection, item)
+            return rows, None
+        except InventoryError as exc:
+            return [], failure or _record(path, 200, str(exc), 1, 0)
 
     def graphql(self, query: str) -> tuple[dict[str, Any], dict | None]:
         """One Metadata API call -> ``(payload, error)``. Used for STRUCTURE only (see module doc).
@@ -519,8 +520,7 @@ def _record(path: str, status: int, detail: str, attempts: int, started: float) 
 
 # `role` and `dataType` live on the CONCRETE types, not the Field interface - `fields { role }`
 # fails with FieldUndefined. Inline fragments are required.
-STRUCTURE_QUERY = """
-{ workbooks {
+STRUCTURE_FIELDS = """
     name projectName
     sheets { name }
     dashboards { name }
@@ -528,11 +528,13 @@ STRUCTURE_QUERY = """
       name hasUserReference
       fields { name __typename
         ... on ColumnField     { role dataType }
-        ... on CalculatedField { role dataType formula } } } }
-  publishedDatasources {
-    name isCertified hasExtracts extractLastRefreshTime
-    upstreamTables { fullName } } }
+        ... on CalculatedField { role dataType formula } } }
 """
+STRUCTURE_QUERY = (
+    "{ workbooksConnection(first: 1000) { nodes { luid "
+    + STRUCTURE_FIELDS
+    + " } pageInfo { hasNextPage endCursor } } }"
+)
 
 
 def score_workbook(node: dict[str, Any]) -> dict[str, Any]:
@@ -792,34 +794,47 @@ def _group_members(site: Site, groups: list[dict]) -> list[dict]:
     return errors
 
 
-def _pass2_structure(site: Site) -> tuple[dict[str, Any], list[dict]]:
+def _pass2_structure(site: Site, workbook_luids: list[str] | None = None) -> tuple[dict[str, Any], list[dict]]:
     """One GraphQL call for the whole estate -> ``(data, errors)``.
 
     A structure failure is PRIMARY: ``score_workbook`` answers 0 for a workbook it cannot see, and 0
     complexity is not "simple", it is "unknown" - it feeds the retire-candidate tier directly.
     """
-    LOG.info("pass 2: structure (one GraphQL call for the whole estate)")
+    LOG.info("pass 2: structure (complete Metadata API workbook pages)")
     started = time.monotonic()
-    payload, error = site.graphql(STRUCTURE_QUERY)
-    data = payload.get("data") or {}
-    errors: list[dict] = []
-    if error:
-        LOG.warning("  [WARN] structure UNREADABLE: %s - every complexity score would be 0", error["error"][:150])
-        errors.append({"listing": "structure", "severity": PRIMARY, **error})
-    elif payload.get("errors"):
-        # ``payload`` is parsed JSON handed straight back by ``_request_json`` on a 200, so unlike
-        # the transport/HTTP paths this text never passed through the byte scrubber. Scrub the
-        # echoed body HERE (#196): a proxy or WAF can reflect the request, and this string is
-        # persisted into assessment.json, report.md and estate.db.
-        detail = f"Metadata API errors: {site.scrub_text(str(payload['errors']))[:200]}"
-        severity = SECONDARY if data.get("workbooks") else PRIMARY
-        LOG.warning("  [WARN] %s (%s)", detail, severity)
-        errors.append({"listing": "structure", "severity": severity, **_record(GRAPHQL_ROOT, 200, detail, 1, started)})
-    LOG.info("  %-14s %5d workbook node(s) %s", "structure", len(data.get("workbooks") or []), _took(started))
-    return data, errors
+    failure = None
+
+    def fetch(query):
+        nonlocal failure
+        payload, error = site.graphql(query)
+        if error:
+            failure = error
+            raise MetadataError("metadata api request failed; response refused")
+        return payload
+
+    try:
+        nodes = collect_metadata_workbooks(fetch, STRUCTURE_FIELDS, workbook_luids=workbook_luids)
+        if workbook_luids is not None and {n["luid"].casefold() for n in nodes} != {
+            luid.casefold() for luid in workbook_luids
+        }:
+            raise MetadataError("metadata api omitted selected workbooks; response refused")
+        LOG.info("  structure %d workbook node(s) %s", len(nodes), _took(started))
+        return {"workbooks": nodes}, []
+    except MetadataError as exc:
+        error = failure or _record(GRAPHQL_ROOT, 200, str(exc), 1, started)
+        LOG.warning("  [WARN] structure UNREADABLE: %s", error["error"])
+        return {}, [{"listing": "structure", "severity": PRIMARY, **error}]
 
 
-def collect(site: Site, survey: dict | None, checkpoint=None) -> dict[str, Any]:
+# Scope and evidence stay in the same ordered pass so no enrichment can precede selection.
+def collect(  # pylint: disable=too-many-locals
+    site: Site,
+    survey: dict | None,
+    checkpoint=None,
+    *,
+    project: str | None = None,
+    workbook: str | list[str] | None = None,
+) -> dict[str, Any]:
     """Run the passes in cost order, cheapest first.
 
     ``checkpoint`` is called with the pass-1 inventory the moment it is complete, BEFORE the flakier
@@ -828,6 +843,31 @@ def collect(site: Site, survey: dict | None, checkpoint=None) -> dict[str, Any]:
     """
     LOG.info("pass 1: inventory")
     inventory, errors = _collect_listings(site, INVENTORY)
+    scoped = project is not None or workbook is not None
+    if scoped:
+        inventory["projects"], inventory["workbooks"] = select_scope(
+            inventory["projects"], inventory["workbooks"], project=project, workbook=workbook
+        )
+        wb_ids = {row["id"] for row in inventory["workbooks"]}
+        project_ids = {row["id"] for row in inventory["projects"]}
+        inventory["views"] = [row for row in inventory["views"] if (row.get("workbook") or {}).get("id") in wb_ids]
+        inventory["flows"] = [row for row in inventory["flows"] if (row.get("project") or {}).get("id") in project_ids]
+        if survey:
+            survey = {
+                **survey,
+                "workbooks": [row for row in survey.get("workbooks") or [] if row.get("luid") in wb_ids],
+            }
+        dependency_ids = {
+            dependency.get("luid")
+            for row in (survey or {}).get("workbooks") or []
+            for dependency in row.get("published_dependencies") or []
+            if isinstance(dependency, dict)
+        }
+        inventory["datasources"] = [
+            row
+            for row in inventory["datasources"]
+            if row["id"] in dependency_ids or (row.get("project") or {}).get("id") in project_ids
+        ]
     LOG.info(
         "  %d workbooks, %d views, %d datasources, %d projects, %d groups, %d flows",
         *(len(inventory[spec.label]) for spec in INVENTORY),
@@ -840,8 +880,14 @@ def collect(site: Site, survey: dict | None, checkpoint=None) -> dict[str, Any]:
     LOG.info("pass 1b: deliberate-use signals")
     signals, signal_errors = _collect_listings(site, SIGNALS)
     errors += signal_errors
+    if scoped:
+        content_ids = wb_ids | {row["id"] for row in inventory["views"]}
+        signals = {
+            key: [row for row in rows if (row.get("content") or row.get("view") or {}).get("id") in content_ids]
+            for key, rows in signals.items()
+        }
 
-    data, structure_errors = _pass2_structure(site)
+    data, structure_errors = _pass2_structure(site, [row["id"] for row in inventory["workbooks"]])
     errors += structure_errors
 
     LOG.info("pass 3: IAM (gated on contentPermissions)")
@@ -854,7 +900,12 @@ def collect(site: Site, survey: dict | None, checkpoint=None) -> dict[str, Any]:
         **inventory,
         **signals,
         "structure": data,
-        "structure_by_name": {w["name"]: w for w in data.get("workbooks") or []},
+        "structure_by_luid": {w["luid"].casefold(): w for w in data.get("workbooks") or []},
+        "scope": {"project": project, "workbooks": workbook},
+        "optional_evidence": {
+            "dependency_order": "REST survey supplied" if survey is not None else "unavailable: no --survey",
+            "published_datasource_metadata": "not collected; REST catalogue only",
+        },
         "permissions": permissions,
         "permission_denied_listings": permission_denied_listings,
         "survey": survey,
@@ -934,7 +985,7 @@ def _parse_dependencies(survey: dict | None) -> tuple[set[str], list[dict]]:
         return required, dep_rows
     for wb in survey.get("workbooks") or []:
         if wb.get("complexity_understated"):
-            required.add(wb.get("name"))
+            required.add(wb.get("luid"))
         for dep in wb.get("published_dependencies") or []:
             # His schema, verified against estate_survey.py output: `datasource_name`. Read it
             # explicitly rather than with a chain of fallbacks - an earlier version guessed at
@@ -969,7 +1020,7 @@ def assemble(raw: dict[str, Any], target: float) -> dict[str, Any]:
 
     rows = []
     for wb in raw["workbooks"]:
-        node = raw["structure_by_name"].get(wb["name"], {})
+        node = raw.get("structure_by_luid", {}).get(wb["id"].casefold(), {})
         scored = (
             score_workbook(node)
             if node
@@ -988,7 +1039,7 @@ def assemble(raw: dict[str, Any], target: float) -> dict[str, Any]:
                 "updated_at": wb.get("updatedAt"),
                 **scored,
                 **live,
-                "complexity_understated": 1 if wb["name"] in required else 0,
+                "complexity_understated": 1 if wb["id"] in required else 0,
             }
         )
 
@@ -999,6 +1050,8 @@ def assemble(raw: dict[str, Any], target: float) -> dict[str, Any]:
         "workbooks": curve,
         "dependencies": dep_rows,
         "survey_supplied": survey is not None,
+        "scope": raw.get("scope"),
+        "optional_evidence": raw.get("optional_evidence", {}),
         "iam_hard_cases": iam_hard_cases(raw["permissions"], raw["groups"]),
         "permission_denied_listings": raw.get("permission_denied_listings"),
         # The site's render ceiling, carried through verbatim so a programmatic consumer reads the
@@ -1703,6 +1756,9 @@ def render_report(assembled: dict[str, Any], raw: dict[str, Any], target: float)
     out += _render_datasource_hazards(assembled)
     out += _render_server_ceiling(assembled.get("server_ceiling"))
     out += _render_iam(assembled, raw)
+    if assembled.get("optional_evidence"):
+        out += ["", "## Optional evidence", ""]
+        out += [f"- {key}: {value}" for key, value in assembled["optional_evidence"].items()]
     return "\n".join(out) + "\n"
 
 
@@ -1712,6 +1768,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, type=Path, help="output directory (should be git-ignored)")
     parser.add_argument("--env", type=Path, default=Path(".env"), help="git-ignored KEY=VALUE credentials")
     parser.add_argument("--survey", type=Path, help="estate_survey.py --json output: the REST-derived dependency graph")
+    parser.add_argument("--project", help="exact project LUID or unambiguous exact name")
+    parser.add_argument("--workbook", action="append", help="exact workbook LUID or unambiguous exact name; repeatable")
     parser.add_argument(
         "--coverage-target",
         type=float,
@@ -1853,7 +1911,13 @@ def main() -> int:
     started = time.perf_counter()
     args.out.mkdir(parents=True, exist_ok=True)
     _clear_final_artifacts(args.out)
-    raw = collect(site, survey, checkpoint=lambda inventory: _checkpoint(args.out, inventory, site.scrub_text))
+    raw = collect(
+        site,
+        survey,
+        checkpoint=lambda inventory: _checkpoint(args.out, inventory, site.scrub_text),
+        project=args.project,
+        workbook=args.workbook,
+    )
     assembled = assemble(raw, args.coverage_target)
     db = write_store(args.out, raw, assembled, site.scrub_text)
     site.sign_out()

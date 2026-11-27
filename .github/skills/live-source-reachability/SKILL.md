@@ -1,6 +1,6 @@
 ---
 name: live-source-reachability
-description: Prove a Tableau migration's live database sources are reachable through the Power BI artifact that will ship. Use before builders start on any workbook/datasource with live sources, when a Desktop refresh stops on a sign-in or other dialog, or when sign-off needs real-data evidence for a live source.
+description: Establish live-source proof through the shipped Power BI artifact, or stage basic model connections and table definitions for a required human refresh. Use before builders start on live sources, on Desktop dialogs, or when sign-off needs real-data evidence.
 ---
 
 # Live-source reachability
@@ -9,10 +9,51 @@ Use this before any builder starts on a workbook/datasource with live database s
 the **Power BI artifact you will ship** can reach its source. A Python, SQL client or Tableau-only
 check does not use Power BI Desktop's credential store, so it proves nothing here.
 
-Run it **before dispatching builders**. START_READY can admit `live_unproven`; it is not data proof.
-There is no write-time enforcement. Use the existing
+Load this skill **before dispatching builders**. Normally establish proof first through the run
+order below. The explicit [staged model fallback](#staged-model-fallback--human-refresh-required)
+is the exception: basic model preparation may precede proof, but report authoring waits for the
+human refresh and saved-data checks. START_READY can admit `live_unproven`; it is not data proof.
+There is no write-time enforcement. Automated refresh uses the existing
 [`pbip-model-refresh` procedure](../pbip-model-refresh/SKILL.md#automatic-callers---automatic-source-scope-780),
 with its Desktop, bridge and client-library prerequisites; do not create a second refresh route.
+
+## Staged model fallback — human refresh required
+
+Offer **build basic model, then human Refresh and Save** when live connectivity is unproven,
+the model does not exist yet, or automatic-source qualification is unavailable or refuses.
+Do not require a successful connection merely to prepare the model.
+
+1. **Record the human's choice before preparation.** For `simple/v1`, persist the choice in the
+   same run's decisions and private brief. For advanced work, retain the existing
+   `fallback_authorization: model_only_unvalidated` and model-only scope; package START_READY
+   and custody requirements still apply. This is not permission to change scope or a gate verdict.
+2. **Dispatch only the semantic builder for offline preparation.** Create or repair basic
+   connections, literal parameters, table/column definitions and source-navigation M from the
+   supplied spec and explicitly mapped targets, in the run-owned working tree. Supplied connection
+   examples remain read-only. Do not execute M, query a source, trigger Refresh, fabricate rows or
+   invent missing schema. Return missing definitions to the human instead.
+3. **Stop as soon as basic connections and table definitions are in place.** Hand over the exact
+   working `.pbip` path, source identities, named canary tables and any static findings.
+   Ask the human to review the connections and queries, open that project in Power BI Desktop,
+   resolve any authentication/approval prompts themselves, then click **Refresh** and **Save**.
+   Refresh executes the model's current M, including custom SQL; disclose this in the handoff.
+   End the turn and wait. Do not launch an operator-only refresh command on the human's behalf,
+   approve a dialog, or substitute an automatic retry for this required human refresh.
+4. **Verify after the human reports Refresh and Save finished.** Use the existing
+   `pbip-model-refresh` read-only `--verify-only --pid <pid> --canaries <table> [<table> ...]`
+   procedure on the same working model. Check the binding, positive named canaries covering every
+   live source, and persisted-cache/cold-reopen evidence under that skill. Human confirmation alone
+   is not data proof; a canary read alone is not proof of a fresh persisted refresh. Record the
+   human refresh separately from native check outcomes; never relabel it `DATA_OK + PERSISTED`.
+5. **Resume only after those checks succeed.** Finish the semantic build, then hand off to report
+   authoring only within the commissioned scope. Advanced model-only scope does not automatically
+   expand to report work. Failed, empty, unavailable or wrong-model checks keep the handoff pending.
+   A subsequent source/connection change requires another human Refresh and Save before handoff.
+
+The prepared model stays **UNVALIDATED — HUMAN REFRESH REQUIRED** until verified. A dialog remains
+a human stop even in this fallback. Preserve actual failures and limitations; no automatic-source
+refusal is turned into a pass. Independent fidelity comparison and advanced COMPLETE evidence
+requirements below remain unchanged.
 
 ## Run order
 
@@ -21,6 +62,11 @@ with its Desktop, bridge and client-library prerequisites; do not create a secon
    ```powershell
    python scripts\preflight_source_credentials.py --spec <spec>
    ```
+
+   For `simple/v1`, add `--route simple` to print the staged-model guidance instead of the
+   advanced pre-build directive. This changes guidance only: live sources still return nonzero,
+   classification opens no connection, and the staged fallback still needs a recorded human choice.
+   The flag requires `--spec`; bundle and service checks retain their advanced behavior.
 
    Any live database source needs steps 2 to 5. No live source: record that and stop here.
 
@@ -79,8 +125,10 @@ with its Desktop, bridge and client-library prerequisites; do not create a secon
   same-run PASS `data-evidence` row: full refresh, persisted, and named canaries that returned rows.
   Independent `@pbi-migration-validator` shipped-artifact fidelity sign-off remains mandatory;
   data proof alone is not a Tableau match or COMPLETE.
-- **Model-only work** is allowed only when the brief says `fallback_authorization: model_only_unvalidated`.
-  The result stays unvalidated and cannot serve a report as validated data.
+- **Advanced model-only work** is allowed only when the brief says
+  `fallback_authorization: model_only_unvalidated` with model-only scope. Use the staged fallback
+  above and require human Refresh and Save once the basic model exists. The result stays
+  unvalidated and cannot serve a report as validated data before verification.
 
 ## Old run trees
 

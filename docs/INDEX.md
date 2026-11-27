@@ -7,10 +7,45 @@ Map of maps for agent-facing knowledge. Start here, then open the matching index
 
 ## Start here for a migration unit
 
+1. `python scripts/start_migration.py --mode single --style one-to-one --numeric none --workbook <exact-LUID> --assessment skip`
+   (or installed `t2p start` with the same flags) — the default **simple/v1** route.
+   Choose `single|batch`, `one-to-one|modernize`, and `none|required` explicitly;
+   single chooses `--assessment skip|run`, batch assesses the exact project-scoped selection.
+   [Runbook intake and recovery](operator-runbook.md#simple-route--intake-to-advisory-comparison)
+   covers local inputs, explicit PBIP/connection mappings, native findings and same-run resume.
+2. Follow returned human/task actions: scoped assessment when commissioned → source
+   harvest, local parse/provenance and dependencies → Oracle → semantic builder only
+   when needed → report builder → independent **advisory** comparison. The dispatcher
+   invokes task tools; Python never invokes agents. Each selected workbook gets one
+   report/unit, a private `simple-brief/v1` brief under
+   `assessment/briefs/UNIT/migration-brief.md`, and working `deliverables/UNIT`.
+3. `python scripts/t2p.py status --run <absolute-run> --json` — read-only observations;
+   `human_actions`, stages and `route` expose the next action, not readiness or fidelity.
+   Resume the **same absolute run** with `start --resume`; retain successful sources,
+   commissioned choices, mappings and environment selection. Native absences/errors
+   need explicit human decisions; safety, credentials/dialogs, custody, private-output
+   and unsaved-state safeguards are not bypassable. No engine bundle, package,
+   START_READY or COMPLETE prerequisite belongs to this simple route. Disclose
+   unverified data/fidelity and obtain separate approval before deployment.
+4. Load the applicable skill for live-source proof, refresh/persistence, Desktop
+   observation or AI metadata. Offline Linux checks are not live PAT/Desktop acceptance.
+   For unproven live sources, offer the
+   [staged model fallback](../.github/skills/live-source-reachability/SKILL.md#staged-model-fallback--human-refresh-required):
+   prepare basic connections/tables offline, stop for human Refresh and Save, then verify the same
+   model's canaries and persistence before report authoring.
+
+## Explicit advanced package route
+
+Select `python scripts/start_migration.py --advanced [...]` or `t2p start --advanced [...]`
+for the existing five-stage survey/assessment/harvest/Oracle/conversion route.
+`t2p assess` remains a separate advanced assessment-only route, including existing
+survey/Admin Insights evidence. The following package/check/promote authorities are
+unchanged; do not apply them to a simple-route advisory handoff.
+
 1. `python scripts/check_reference_readiness.py <package> [...]` — **after deterministic emission, `package_unit.py` packaging and applicable binding, before agentic dispatch**. The final Phase-1 package-only verdict is **`START_READY / 0`** only when boundary, current S1/S2, issued v2 brief, source, canonical data access, reference policy and fresh binding inspection all pass. Bind separately with `set_data_folder.py --package <absolute-package>`; supply a shared provider and consumer in **ONE final check**, never a consumer alone. Established findings exit 1; `CANNOT_ESTABLISH` exits 3; neither permits dispatch. Ordinary `<bundle>` targets retain reference-only `READY`/engine-earned `NOT_APPLICABLE`, never package START_READY. Reference grades and `limitations_encountered` remain unchanged; BOUND stays UNVALIDATED. See [final START_READY](reference-readiness.md#final-package-start_ready-562-622) and the authoritative [conversion, dispatch, and fidelity boundaries](reference-readiness.md#conversion-dispatch-and-fidelity-boundaries).
 2. `python scripts/check_unit.py <unit-or-bundle> --scope <model|report|integration|all>` — diagnostics. **Sole COMPLETE authority:** `python scripts/check_unit.py <package> --scope all --receipt-sha256 <H>`, with exact caller-supplied lowercase 64-hex H, no prefix or token discovery. Tokenless all-scope stays non-success; layers never COMPLETE. Current v2 numeric `none` waives comparison only; required/unknown remains `CANNOT_ESTABLISH(NUMERIC)`. [Evidence, exact disclosures and current-snapshot limits](../scripts/README.md#phase-2-complete--one-caller-pinned-current-snapshot-check); direct gates isolate findings.
 3. `python scripts/read_handover.py <bundle> --workbook <name>` — residual work queue and engine-block reason.
-4. Live database sources: run the `live-source-reachability` skill **before builders start**. It delegates to `pbip-model-refresh`'s existing automatic-source procedure on the shipped working copy with named canaries; any sign-in or other dialog is a human stop. START_READY can admit `live_unproven`; a live unit reaches COMPLETE only with `check_unit`'s same-run PASS `data-evidence` row and independent fidelity sign-off.
+4. Live database sources: load the `live-source-reachability` skill **before builders start**. Normally it delegates proof to `pbip-model-refresh`'s existing automatic-source procedure on the shipped working copy with named canaries. Its explicitly selected model-only staged fallback allows basic offline preparation first, then requires human Refresh and Save and verification; it does not waive package entry or scope. Any sign-in or other dialog is a human stop. START_READY can admit `live_unproven`; a live unit reaches COMPLETE only with `check_unit`'s same-run PASS `data-evidence` row and independent fidelity sign-off.
 5. Load the right skill before acting: `live-source-reachability` for live-source proof and
    credential stops, `pbip-model-refresh` for cache/refresh, and
    `powerbi-ai-readiness` for Copilot/Q&A metadata.
@@ -18,7 +53,7 @@ Map of maps for agent-facing knowledge. Start here, then open the matching index
 
 After a machine-wide Power BI sign-in, rerun the skill's refresh for each live unit that stopped on a dialog. Run trees made before the credential gate was retired may still deny writes; [runbook §4.14](operator-runbook.md#414-an-old-run-folder-refuses-writes-after-the-credential-gate-was-retired) removes that.
 
-Every other script is advanced or internal, outside the per-unit route; tiers live in the [script capability inventory](agent-capability-wiring.md#script-capability-inventory).
+Every other script is advanced or internal; tiers live in the [script capability inventory](agent-capability-wiring.md#script-capability-inventory).
 
 ## Inclusion rule
 
@@ -28,13 +63,14 @@ Eligible files: tracked Markdown knowledge/navigation files, `.github/pbi.kb/**/
 
 | Task | Path | Read when... |
 |---|---|---|
-| Start or route session | [`AGENTS.md`](../AGENTS.md) | Customer runtime: front door → one intake → private v2 brief → task-tool dispatch → independent Tableau comparison. |
+| Start or route session | [`AGENTS.md`](../AGENTS.md) | Customer runtime: simple intake → private brief → task-tool builders → advisory comparison; explicit advanced package route. |
 | Understand toolkit | [`README.md`](../README.md) | Project purpose and quick start. |
 | Contribute safely | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | Issue-to-plan-review-to-PR lifecycle, status labels, mechanical exception and validation expectations. |
 | Triage incoming issues | [`.github/workflows/issue-intake.md`](../.github/workflows/issue-intake.md) | Template review, cloud/local routing and plan/readiness-gated Copilot assignment; setup in CONTRIBUTING. |
 | Open a focused PR | [`.github/PULL_REQUEST_TEMPLATE.md`](../.github/PULL_REQUEST_TEMPLATE.md) | Behavioral/mechanical paths, plan-review evidence, validation exits and exact blind-reviewed head SHA. |
 | Use VS Code Copilot | [`.github/copilot-instructions.md`](../.github/copilot-instructions.md) | VS Code entry instructions. |
-| Advanced script reference | [`scripts/README.md`](../scripts/README.md) | Advanced and implementation usage, not the ordinary route; core commands are under Start here. `test_repo_layout.py` owns completeness. |
+| Inspect operations canvas | [`.github/extensions/t2pbi-migration-ops/README.md`](../.github/extensions/t2pbi-migration-ops/README.md) | Existing manual assessment/wave tracking canvas; queuing does not execute work or supersede the current default route. |
+| Script reference | [`scripts/README.md`](../scripts/README.md) | Simple start/resume and task records; advanced and internal script inventory. `test_repo_layout.py` owns completeness. |
 | Capture migration feedback | [`.github/skills/migration-feedback/SKILL.md`](../.github/skills/migration-feedback/SKILL.md) | Explicit workbook/datasource or script/feature escalation: private evidence, controlled fictitious reproduction, engine/local/external/cannot-establish route; stops at `issue-payload.json`. |
 | Author PBIR visuals | [`.github/pbi.kb/visual-cookbook.md`](../.github/pbi.kb/visual-cookbook.md) | Map of visual files with confidence tiers and Tableau idioms. |
 | Inspect examples | [`examples/README.md`](../examples/README.md) | Map of example migrations, provenance, screenshots, and evidence files. |
@@ -58,7 +94,7 @@ Eligible files: tracked Markdown knowledge/navigation files, `.github/pbi.kb/**/
 | Review Desktop observer consolidation | [`docs/desktop-observer-simplification.md`](desktop-observer-simplification.md) | Architecture census, observer alternatives and unverified deletion hypotheses; preserves real-row proof (Refs #741). |
 | Find migration guidance | [`docs/dry-run-findings-2026-08-11.md`](../docs/dry-run-findings-2026-08-11.md) | Durable F00x dry-run findings. |
 | Find migration guidance | [`docs/engine-gap-harvest.md`](../docs/engine-gap-harvest.md) | Attribute and classify the `reports/` vs `pbip/` delta into engine-gap evidence — provenance delegated to the `--tamper` gate's own adjudicator. |
-| Find migration guidance | [`docs/migration-phases.md`](../docs/migration-phases.md) | The three-phase pipeline shape: what each phase produces, where it lands, which gate guards each hop, the `_runs/<NNN>-<slug>` identity rule (never renamed/renumbered; one run per pipeline run, **not** per workbook), and the known gaps. |
+| Find migration guidance | [`docs/migration-phases.md`](../docs/migration-phases.md) | Default simple handoff shape and explicit advanced three-phase pipeline; one unchanged run per invocation, not per workbook. |
 | Find migration guidance | [`docs/migration-programme.md`](../docs/migration-programme.md) | Programme phases and operating model. |
 | Find migration guidance | [`docs/migration-spec.md`](../docs/migration-spec.md) | `migration-spec.json` contract. |
 | Find migration guidance | [`docs/operator-runbook.md`](../docs/operator-runbook.md) | Manual pipeline operation, the failure playbook, and §4.12 **Windows/PowerShell misreads** — `NativeCommandError` on a command that exited 0, long-path `Remove-Item`, `Start-Process -ArgumentList` mangling a multi-word `--workbook`, and `requests`+certifi failing TLS where the toolkit's `urllib` + Windows certificate store succeeds. |
@@ -66,7 +102,7 @@ Eligible files: tracked Markdown knowledge/navigation files, `.github/pbi.kb/**/
 | Run the test suite | [`docs/parallel-test-loop.md`](parallel-test-loop.md) | Fast parallel loop vs the serial pre-PR gate. |
 | Find migration guidance | [`docs/reference-capture.md`](../docs/reference-capture.md) | Tableau reference capture and evidence grading. |
 | Find migration guidance | [`docs/reference-readiness.md`](../docs/reference-readiness.md) | Post-emission reference prerequisite for agentic work: completeness, evidence and grade; conversion/dispatch/fidelity boundaries. |
-| Migrate ONE workbook by hand | [`docs/start-with-one-workbook.md`](../docs/start-with-one-workbook.md) | Bring-your-own `.twb` + screenshots, no Tableau Server: the verified command sequence, the `tableau-<exact name>.png` naming contract, and the Desktop-connection prerequisite. |
+| Start ONE workbook | [`docs/start-with-one-workbook.md`](../docs/start-with-one-workbook.md) | Default local simple preparation without PAT, disclosed reference gaps and explicit same-run decisions; historical advanced manual conversion remains separate. |
 | Find migration guidance | [`docs/review-remediation-plan.md`](../docs/review-remediation-plan.md) | Route validation/review findings. |
 | Improve review throughput | [`docs/review-throughput-postmortem.md`](../docs/review-throughput-postmortem.md) | Dated review-round costs, causes and counterexamples; live review contract in `CONTRIBUTING.md`. |
 | Find migration guidance | [`docs/tableau-dax-translation-guide.md`](../docs/tableau-dax-translation-guide.md) | Translate Tableau calcs/LODs/table calcs. |
@@ -203,8 +239,8 @@ Base: ``
 .github/skills/powerbi-ai-readiness/SKILL.md
 .github/skills/powerbi-desktop-debugging/SKILL.md
 ```
-<!-- Narrow CLI pilot is opt-in; direct-script guidance remains authoritative. -->
-
-The opt-in `scripts/t2p.py` doctor/start/status pilot is documented in
-[`scripts/README.md`](../scripts/README.md#narrow-t2ppy-pilot-refs-749--773). It adds no readiness authority or dispatcher replacement;
-the approved bounds remain [`docs/t2p-pilot-plan.md`](t2p-pilot-plan.md).
+The `scripts/t2p.py` facade is documented in
+[`scripts/README.md`](../scripts/README.md#narrow-t2ppy-pilot-refs-749--773).
+Default start uses simple/v1; explicit advanced commands preserve their existing authorities.
+The historical [pilot plan](t2p-pilot-plan.md) describes the earlier advanced start,
+not the current default. No facade command replaces dispatcher task tools or establishes fidelity.

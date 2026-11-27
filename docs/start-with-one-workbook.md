@@ -1,12 +1,74 @@
 # Start with one workbook
 
-You have **one** Tableau dashboard and its screenshots. No Tableau Server connection, no estate
-sweep. The repository-manual workflow was exercised end to end on 2026-09-04 with no
-`TABLEAU_SERVER_URL` and no PAT set. Choose the route before using its layout.
+You have **one** Tableau workbook, optionally an existing PBIP. Default simple/v1
+prepares the source and hands off to builders; it does not require an estate sweep,
+conversion engine or package. Local parsing/provenance needs no Tableau PAT.
 
-For a whole site instead, see [`AGENTS.md`](../AGENTS.md) → *Starting a migration*.
+## Default simple start
+
+Complete [Windows setup and session preflight](operator-runbook.md#start-here) first.
+Do not update tools mid-migration. Offline Linux contributor parsing/tests are not
+live Tableau/Desktop acceptance.
+
+```powershell
+t2p start --mode single --style one-to-one --numeric none `
+    --local '<private-workbook.twbx>' --assessment skip `
+    --session-id '<real-session-UUID>'
+t2p status --run '<printed-absolute-run>' --json
+```
+
+Use `.twb` or `.twbx`; supplied inputs stay read-only. Choose `--style one-to-one|modernize`
+and `--numeric none|required` explicitly. `--assessment skip|run` is explicit for single:
+local inputs have no server assessment, so choosing run produces a finding rather than
+invented evidence. Modernization requires a human-approved `--design` before report work.
+For an authenticated workbook, substitute `--workbook <exact-LUID>` (optionally scoped by
+`--project <exact-name-or-LUID>`); configure PAT securely in environment/ignored `.env`,
+never arguments. Batch projects use the [runbook](operator-runbook.md#simple-route--intake-to-advisory-comparison).
+
+The front door allocates once (repo-local `_runs/`, or explicit `--runs-parent`), prepares
+source/spec/provenance and published dependencies, attempts Oracle when authenticated,
+and returns native human/task actions. Local source reference absence is retained: choose
+an offered `--decision reference:UNIT=continue` only when authorizing that limitation.
+Supplying arbitrary screenshots does not clear the local authenticated-reference absence.
+This does not turn screenshots or source parsing into independent numeric/visual proof.
+
+One workbook gets one report/unit. Use the printed private
+`assessment/briefs/UNIT/migration-brief.md` (`simple-brief/v1`) and working
+`deliverables/UNIT` in every task. The dispatcher invokes semantic builder only when
+needed, report builder, then read-only independent advisory comparison; Python never
+invokes agents. No bundle/package, START_READY or COMPLETE prerequisite applies.
+
+- Existing report: `--pbip WORKBOOK_KEY=<existing.pbip>` is explicit per workbook;
+  no supplied PBIP means greenfield. Originals and existing authored destinations
+  are never overwritten.
+- `--connection-example <PBIP>` inspects actual M/TMDL connections read-only, not
+  a visual template. `--target WORKBOOK_KEY:server=value` (also `warehouse`, `database`,
+  `schema`) is a semantic-owner mapping, not an automatic rewrite.
+- Resume **the same absolute run** with `t2p start --resume <absolute-run>`.
+  Reuse choices, mappings, selected environment and successful sources. Apply offered
+  `--decision ID=retry|replace|skip|continue|accept`; never silently restart or widen scope.
+- Save real task results under that run and resume with
+  `--record UNIT:semantic|report|comparison=<run-owned-result.json>`.
+  [Result schema and layer-owned artifact paths](../scripts/README.md#simple-mappings-decisions-and-task-records).
+- Without warm model cache, report work requires explicit
+  `--decision cache:UNIT=continue` and disclosed unverified data. Authorization,
+  credentials/sign-in/modal dialogs, custody/private outputs and unsaved-state
+  safeguards still stop work; continuation cannot bypass them.
+
+Comparison is advisory: retain findings, repair via the owning builder, or explicitly
+accept/skip with limitations, never fake a pass. Source preparation/portable tests do not
+prove Desktop data, persistence or Tableau fidelity. Deployment needs separate approval.
+
+## Explicit advanced/manual alternative
+
+The repository-manual conversion workflow below was exercised on **our reference estate**
+on 2026-09-04 with no `TABLEAU_SERVER_URL` or PAT. That historical evidence is not acceptance
+of the new simple route. Its engine/package reference contracts and folder conventions
+apply only when this advanced/manual route is selected.
 
 ## Choose the route first
+
+The following choices belong to the explicitly selected advanced/manual alternative.
 
 1. **Respect the requested write/output boundary.** If the request says local output and no toolkit
    repository changes, use an external working/output root and leave supplied inputs unchanged.
@@ -15,7 +77,7 @@ For a whole site instead, see [`AGENTS.md`](../AGENTS.md) → *Starting a migrat
    Use its `scripts\new_run.py` allocator for a fresh short external run and its optional D7
    `reference_images.py --mode export` acquisition. Do not silently switch to the repository layout
    or copy another engine.
-3. **This page's commands are the explicitly selected repository-manual alternative**, for a
+3. **The commands below are the explicitly selected repository-manual alternative**, for a
    repository-managed unit and later promotion. Use `scripts\work_dirs.py` to allocate the run, as
    shown below; its existing `--runs-parent <short-parent>` option provides a short external run
    root when needed. Never hand-invent or reuse a run number.
@@ -45,15 +107,15 @@ Get the environment green with the direct preflight command, without a signing-p
 git clone <this repo>
 cd tableau-to-pbi-migration
 uv sync --all-extras
-powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1 -Update
+powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1 -Update -CheckUpstream
 ```
 
 **Only after an actual unsigned/ExecutionPolicy startup refusal**, follow
 [preflight cannot start](operator-runbook.md#preflight-cannot-start).
 If recovery is allowed, retry the **exact originating command and arguments**; this setup call
-retains `-Update`, not the runbook's session-start arguments.
+retains both `-Update -CheckUpstream` for session start.
 
-Preflight is the contract — it prints an install hint beside anything missing and exits non-zero.
+Advanced preflight is the contract — it prints an install hint beside anything missing and exits non-zero.
 Beyond the Fabric skills, the Power BI Desktop bridge and the `powerbi-report-author` CLI, the one
 extra dependency people miss is `pythonnet`, which loads the ADOMD client Desktop already ships
 (preflight's `adomd_client` check). Open models with `python scripts/open_desktop.py <pbip>`; it
@@ -169,6 +231,8 @@ stateless and cannot infer them, and the file survives a closed terminal.
 
 ## What to expect
 
+These are historical advanced reference-run expectations, not measurements of the simple route.
+
 - **~1.5 hours minimum** for a simple report, most of it not model time — Desktop opens, refreshes and
   validation passes dominate.
 - **Roughly $50–100 of model spend** for a medium-complexity report; more for a complex one.
@@ -177,11 +241,12 @@ stateless and cannot infer them, and the file survives a closed terminal.
 
 ## Two limits worth knowing up front
 
-1. **A Power BI Desktop error dialog still needs you.** The agent cannot read it. When Desktop stops
-   on an error, copy the text and paste it into the chat — that is the intended route, and UI
-   automation is not a recommended substitute.
+1. **A Power BI Desktop dialog still needs a human.** Read-only observation/collection
+   may preserve its details privately; never dismiss, approve, enter credentials or resume
+   past it automatically. Follow the Desktop-debugging skill; leave the dialog open.
 2. **Power Query M has no validation path equivalent to TMDL.** Generated M that is subtly wrong is
    not self-detectable yet, so a data-shaping step deserves a human read even when every gate is
    green.
 
-Feedback: open an issue on this repo.
+Migration bug escalation uses the migration-feedback skill: private evidence and a
+public-safe issue payload, never publish customer material automatically.

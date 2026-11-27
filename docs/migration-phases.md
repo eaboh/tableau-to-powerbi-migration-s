@@ -1,13 +1,76 @@
-# The three-phase migration pipeline
+# Migration shapes — simple handoff and advanced pipeline
 
 Where everything lives, what moves between the locations, and which gate guards each hop.
+
+## Default simple assessment-to-builder handoff
+
+`start_migration.py` / `t2p start` default to **simple/v1**. Choose explicit
+`--mode single|batch`, `--style one-to-one|modernize` and `--numeric none|required`.
+Single chooses `--assessment skip|run`; batch assesses the exact project-scoped
+selection, with no implicit child projects. This is not the advanced survey below.
+
+```text
+explicit intake → exact scope → optional scoped assessment (no survey/Admin Insights)
+               → source harvest + local parse/provenance + published dependencies
+               → Oracle → semantic builder only when needed → report builder
+               → independent advisory comparison
+```
+
+One invocation is one run, and one selected workbook is one report/unit, even in batch:
+
+```text
+_runs/<NNN>-<slug>/                 same absolute run throughout; route: simple/v1
+    run.json                       intake, selected environment, mappings, stages/decisions
+    assets/                        private source/spec/provenance and dependency evidence
+    assessment/briefs/UNIT/
+        migration-brief.md         private simple-brief/v1, not an advanced v2 receipt
+    oracle/UNIT/                   native reference evidence/findings
+    deliverables/UNIT/             run-owned editable PBIP/model/report (supplied or greenfield)
+    scratch/                       private task-result JSON and disposable scratch
+```
+
+The dispatcher invokes the returned layer task actions; Python never invokes agents.
+`--record UNIT:semantic|report|comparison=<run-owned-result.json>` records real
+`authored|findings|failed|compared` outcomes and native exit codes, with optional existing
+run-relative artifacts allowed only for the authoring layer. The comparison owner is read-only.
+`t2p start/status --json` exposes `route`, `stages` and `human_actions`, not fidelity authority.
+No engine conversion/bundle, package, START_READY or COMPLETE prerequisite applies.
+
+`--pbip WORKBOOK_KEY=path` is explicit supplied-project mapping; absent PBIP means
+greenfield, not automatic discovery. `--connection-example <PBIP>` reads actual
+connections read-only; `--target WORKBOOK_KEY:server|warehouse|database|schema=value`
+routes explicit target fields to the semantic owner, never automatic rewriting.
+Local `--local` fixtures parse without PAT; all Tableau calls use environment/ignored
+`.env` PAT, never secrets in arguments. Preserve originals and successful source artifacts.
+
+Resume `--resume <absolute-SAME-run>` with its existing choices, mappings and selected
+environment. Offered `--decision ID=retry|replace|skip|continue|accept` and authorized
+`--replacement ID=path` preserve native errors/absence and disclose limitations.
+Report work without warm cache requires explicit `cache:UNIT=continue` permission
+and unverified-data disclosure. Authorization/dialog, custody/private-output and
+unsaved-state safeguards remain mandatory; no safety or authoring-failure bypass.
+Keep private outputs ignored and run identity unchanged.
+
+Advisory comparison findings may be repaired by the owning layer, or explicitly
+accepted/skipped with unverified scope disclosed, not relabelled pass/COMPLETE.
+Linux portable tests do not prove live PAT/Desktop acceptance or visual/numeric
+fidelity. Deployment requires separate approval.
+[Commands and recovery](operator-runbook.md#simple-route--intake-to-advisory-comparison).
+
+## Explicit advanced three-phase pipeline
+
+Select `start_migration.py --advanced` / `t2p start --advanced` for the existing
+five-stage survey/assessment/harvest/Oracle/conversion front door. `t2p assess`
+remains the separate advanced assessment-only route, with survey/Admin Insights
+evidence unchanged. All package/check/promote meanings below retain their authority
+for that advanced route; they are not prerequisites or certificates for simple/v1.
 
 Read this when you are picking up a migration and need to know *where to find what*. The
 command-by-command procedure — flags, timings, exit codes, failure playbook — is
 [`docs/operator-runbook.md`](operator-runbook.md); this document explains the **shape** that runbook
 walks through.
 
-The pipeline has three locations, and the direction is one-way:
+The advanced pipeline has three locations, and the direction is one-way:
 
 ```
    TABLEAU SITE  /  .twb .twbx .tds .tdsx

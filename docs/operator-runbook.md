@@ -1,11 +1,11 @@
-# Operator runbook — migrating a Tableau estate into Fabric
+# Operator runbook — Tableau to Power BI handoff
 
 **Audience:** the engineer sitting at the keyboard during a live migration, who may never have seen
 this repo before. Read it top to bottom once the day before; use it as a lookup table on the day.
 
-**Scope:** an *estate* migration — a whole Tableau site, or a folder of workbooks — from survey
-through to items landing in a Fabric **landing-zone** workspace. A single-workbook migration is the
-same pipeline with steps 1–4 skipped.
+**Scope:** the default single/batch simple assessment-to-builder handoff, plus explicitly
+advanced estate conversion/package operations. The historical survey-to-Fabric procedure
+below is advanced; deployment always requires separate approval.
 
 > **This repository is PUBLIC.** Nothing here names a customer, tenant, site, workspace, host or
 > token. Every real value is a placeholder — `<site>`, `<workspace-id>`, `<tenant-id>`, `<bundle>` —
@@ -28,21 +28,100 @@ $t2p = Join-Path $toolkit '.venv\Scripts\t2p.exe'
 & $t2p doctor
 ```
 
-Resolve doctor blockers before continuing.
+Resolve authoring/safety blockers before continuing. Doctor checks tooling, not source
+access or fidelity. An engine-related native readiness finding may be explicitly continued
+on the simple route, which does not run the engine; preserve the finding and disclose it.
+Do not bypass credentials/dialogs, custody/private-output or unsaved-state safeguards.
 
 For a local workbook, use the [single-workbook guide](start-with-one-workbook.md).
-For folders, datasources or whole-site expert operations, use the [manual pipeline](#2-the-happy-path).
+For datasources or whole-site expert operations, use the [advanced/manual pipeline](#2-the-happy-path).
 For an **approved live project**:
 
 ```powershell
-& $t2p start --project '<exact-name-or-LUID>' --session-id '<real-session-UUID>'
+& $t2p start --mode batch --style one-to-one --numeric required `
+    --project '<exact-name-or-LUID>' --session-id '<real-session-UUID>'
 & $t2p status --run '<absolute-run>'
 ```
 
-Use the absolute run printed by `start`; assessment is site-wide and exit 0 means capture only.
-After successful capture, continue with the [agent handoff](../AGENTS.md#starting-a-migration--the-dispatchers-job):
-private briefs, START_READY / 0 before builders or validators, and independent Tableau sign-off.
-Keep status output private. Doctor checks tooling, not source access or migration readiness.
+Use the absolute run printed by `start`. Default batch assessment is exact project-scoped;
+there is no engine survey/Admin Insights or conversion. Follow returned actions through
+the dispatcher task tool, using private briefs and run-owned deliverables. Preparation
+exit 0 is not fidelity. Keep status output private and retain unverified scope.
+
+### Simple route — intake to advisory comparison
+
+Choose `--mode single|batch`, `--style one-to-one|modernize`, and
+`--numeric none|required` explicitly. Single selects one workbook and
+`--assessment skip|run`; batch runs scoped assessment for one exact project
+(no implicit child projects), optionally narrowed by repeated `--workbook`.
+Modernization requires a human-approved `--design` before report authoring.
+
+```powershell
+& $t2p start --mode single --style one-to-one --numeric none `
+    --workbook '<exact-workbook-LUID>' --assessment skip
+& $t2p start --mode single --style one-to-one --numeric none `
+    --local '<private-workbook.twbx>' --assessment skip
+```
+
+The route is intake → scope resolution → optional scoped assessor → source harvest,
+local parse/provenance and published dependencies → Oracle → semantic builder only
+when needed → report builder → independent **advisory** comparison. Repeat `--local`
+for offline fixture paths; parsing/provenance does not need PAT. Local inputs lack
+authenticated Oracle/server assessment evidence: retain that absence and make an explicit
+decision, never invent captures or numeric proof. Every Tableau call uses PAT configured
+in environment or ignored `.env`/`--env`; never put secrets in arguments.
+
+One invocation allocates one run; one selected workbook gets one report/unit.
+Private `simple-brief/v1` briefs live in
+`<absolute-run>/assessment/briefs/UNIT/migration-brief.md`; edit only
+`<absolute-run>/deliverables/UNIT`. No engine bundle, package, START_READY or COMPLETE
+prerequisite applies to simple/v1. Supplied workbooks/PBIPs/examples remain read-only.
+
+- Supply PBIP explicitly with repeated `--pbip WORKBOOK_KEY=path`; no supplied
+  mapping means greenfield, not discovery or guessed reuse. Partial batch mappings
+  require a human decision for each unmapped unit.
+- `--connection-example <PBIP>` reads actual M/TMDL connections, not a visual
+  template. Repeated `--target WORKBOOK_KEY:server=value` (or `warehouse`, `database`,
+  `schema`) is an explicit semantic-owner mapping only; no automatic rewriting.
+- `--refresh-strategy uia|operator` defaults to `uia`; operator is a human handoff.
+  Refresh/persistence still follows the skill and real data evidence; permission
+  to build is not proof of rows.
+- Resume with `start --resume <absolute-SAME-run>`: retain intake, mappings, selected
+  environment and successful sources. Do not allocate another run, move it or widen scope.
+  Apply offered `--decision ID=retry|replace|skip|continue|accept` to returned finding IDs.
+  `--replacement ID=<private-path>` supplies an authorized human replacement; preserve
+  native findings and successful custody paths. Diagnostic logs stay in private
+  `scratch/`; retries preserve old failed evidence in separate attempt subfolders.
+- Without a warm cache, report authoring requires an explicit
+  `--decision cache:UNIT=continue` and disclosure of unverified data. Credentials,
+  sign-in/modal dialogs, authorization, custody/privacy and unsaved-state safeguards
+  remain mandatory human stops; safety/authoring failures are not continuation shortcuts.
+
+`kind: task` actions name the semantic/report/comparison owner and exact run/unit/brief/
+working paths. The dispatcher invokes the task tool; **Python never invokes agents**.
+Save real task outcomes as run-owned JSON and resume with
+`--record UNIT:semantic|report|comparison=<result-path>`. Results retain `state`
+`authored|findings|failed|compared`, `native_exit_code` and optional existing run-relative
+`artifacts`. Semantic may record `semantic_model`/`project_file`; report may record
+`report`/`project_file`; the read-only comparison layer cannot author artifacts.
+[Exact records and examples](../scripts/README.md#simple-mappings-decisions-and-task-records).
+
+`t2p start/status --json` exposes `route`, `stages` and `human_actions`, not a gate pass.
+Route discrepancies to their owning builder. Comparison may be explicitly accepted
+or skipped with limitations, never relabelled fake success. Linux portable tests are
+not live PAT/Desktop acceptance; rendering, refresh, persistence and visual/numeric
+fidelity remain unproven until measured against Tableau on the shipping working tree.
+No deployment without separate approval.
+
+### Choose advanced explicitly
+
+`start_migration.py --advanced` / `t2p start --advanced --project <exact-name-or-LUID>`
+retains the five-stage survey, site-wide assessment, harvest, Oracle and conversion route.
+`t2p assess` remains separate advanced assessment-only operation with existing survey/
+Admin Insights evidence. Sections 0, 1.2, the advanced part of 1.5, 2 and the
+engine/package/check/promote failure and verification tables below describe that route.
+Its issued v2 briefs, package-cohort START_READY / 0, caller-pinned COMPLETE and
+promotion authorities are unchanged, and do not certify simple-route work.
 
 [Installation details](../scripts/README.md#narrow-t2ppy-pilot-refs-749--773) ·
 [Doctor troubleshooting](#doctor-fallback).
@@ -53,6 +132,8 @@ Re-measure on the target estate before using them for planning.
 ---
 
 ## 0. The 60-second mental model
+
+**Advanced estate pipeline only.** Default simple handoff is described above.
 
 ```
 Tableau site ──1─► estate_survey.py ──► REST dependency ground truth (JSON)
@@ -76,7 +157,7 @@ Two tiers, and knowing which one you are talking to decides who owns a bug:
 - **our tier** — everything in `scripts/`. It surveys, assesses, harvests, *adjudicates* the engine's
   output into a real exit code, and deploys. ✅ verified: `run_estate.py:check_definition_of_done`.
 
-Three locations, one direction (from `AGENTS.md`, and it is enforced):
+Advanced locations, one direction (from `AGENTS.md`, and it is enforced):
 
 | stage | path | rule |
 |---|---|---|
@@ -115,6 +196,10 @@ powershell -ExecutionPolicy Bypass -File scripts\preflight.ps1 -Update -CheckUps
 [preflight cannot start](#preflight-cannot-start).
 If recovery is allowed, retry the **exact originating command and arguments**; this session-start
 call retains `-Update -CheckUpstream`. An ordinary dependency failure uses preflight's own hints.
+Linux contributors may inspect, author and run portable tests offline without Windows
+preflight; this is not permission for migration, credential or Desktop work. On simple/v1,
+an explicitly accepted engine-related native finding may remain disclosed while work proceeds
+without the engine; safety and authoring readiness failures still block. No updates mid-migration.
 
 ✅ verified — the timing rule is real and it matters:
 
@@ -623,11 +708,17 @@ error, not bad luck. Note your PID when you open one, and close only what you op
 
 ### 1.5 Write the brief
 
-The normal front door is `python scripts\start_migration.py` for the named scope; it allocates once
+**Default simple/v1:** the front door writes the private `simple-brief/v1` at
+`assessment/briefs/UNIT/migration-brief.md` from explicit intake, source/dependency,
+Oracle, mapping and decision evidence. Pass it in every layer task; do not substitute
+an advanced v2 schema or package gate. See [simple handoff](#simple-route--intake-to-advisory-comparison).
+
+**Explicit advanced route:** `python scripts\start_migration.py --advanced` for the named scope allocates once
 and prints absolute run/bundle/handover/reference paths. Repo-local `_runs` is the default;
 `--runs-parent` is opt-in. Do not pre-allocate a second run or silently widen scope. Local folders,
-`.twb/.twbx` and `.tds/.tdsx` use the expert/manual routes in §2 or the
-[one-workbook guide](start-with-one-workbook.md). Published `sqlproxy` source calcs live on the server;
+`.tds/.tdsx` use the expert/manual routes in §2. Local `.twb/.twbx` may use the
+default [one-workbook guide](start-with-one-workbook.md), or its explicitly advanced section.
+Published `sqlproxy` source calcs live on the server;
 migrate the `.tds/.tdsx` first rather than infer a complete model from a dependent workbook.
 
 The brief is a **file**, not a conversation: it survives a dropped session and gives stateless agents
@@ -670,6 +761,17 @@ No level clears the credential stop — a modal sign-in dialog needs a human. Wa
 specify the fallback in the brief (`fallback_authorization: model_only_unvalidated` with model-only
 scope, artifacts unvalidated),
 never pretend a source was reachable or infer authorization.
+
+For live sources, offer the
+[staged model fallback](../.github/skills/live-source-reachability/SKILL.md#staged-model-fallback--human-refresh-required):
+build basic connections and table definitions offline, then **stop for human Refresh and Save**
+of the exact working PBIP. Do not require connectivity before that preparation or automatically
+execute its sources. In simple runs, persist the explicit choice in decisions and the brief;
+advanced runs retain the model-only fallback/scope above and existing package gates.
+Hand over source identities, queries to review, named canaries and static findings. Wait for
+the human, then verify the same model's canaries and persisted-cache/cold-reopen evidence through
+`pbip-model-refresh` before report authoring can resume within the commissioned scope. Human
+confirmation alone is not a passed refresh, fidelity sign-off or COMPLETE.
 
 > ⚠️ **Check the brief is actually ignored before you write anything into it:**
 > `git check-ignore -v -- <actual-private-brief-path>` (without a trailing slash). Repo-local runs
@@ -758,6 +860,9 @@ and conversion/capture success alone never establish a match or COMPLETE.
 ---
 
 ## 2. The happy path
+
+**Explicit advanced/manual pipeline only.** Default start/resume follows the
+[simple handoff](#simple-route--intake-to-advisory-comparison), not these legacy stage folders.
 
 Run every step from the repo root with the venv active. Output directories are git-ignored by
 convention — see §7 for which ones actually are.
@@ -1527,8 +1632,9 @@ not re-ask.
 
 1. Published datasources → fetch the `.tds` and migrate it first, or proceed knowingly incomplete.
 2. Unproven live sources → follow [live-source-reachability](../.github/skills/live-source-reachability/SKILL.md);
-   distinguish structural findings from human credential/dialog stops, or use the brief's model-only
-   unvalidated fallback.
+   distinguish structural findings from human credential/dialog stops, or select its staged model
+   fallback: basic offline connections/tables, then a required human Refresh and Save before
+   verified handoff. Advanced work retains the brief's model-only unvalidated fallback and scope.
 3. Extract-only sources → materialize real rows, or model-only.
 4. The high-severity `limitations_encountered` digest → proceed, or narrow scope.
 
@@ -2053,11 +2159,11 @@ Stop-Process -Id <your-literal-pid> -Force
 
 ### 6.4 Scratch
 
-Remove one-off probe scripts, `%TEMP%` harnesses, and `.pbip` cache/backups. Keep the committed
-deliverables and the re-runnable `_build/` scripts. Confirm nothing scratch leaked into git before
-reporting done.
+Remove one-off probe scripts and disposable scratch, not model caches needed to reopen
+the shipping PBIP with data. Keep run-owned deliverables, evidence and re-runnable
+advanced `_build/` scripts. Confirm nothing private leaked into git before reporting done.
 
-**Canonical pre-bundle layout (issue #291/#234):** the normal front door allocates a numbered run.
+**Advanced canonical pre-bundle layout (issue #291/#234):** the advanced front door allocates a numbered run.
 Expert/manual operation uses the same home under
 `_runs/<NNN>-<slug>/{assessment,assets,bundle,oracle,packages,deliverables,scratch}/` via
 `python scripts/work_dirs.py <unit-name> --json`, rather than inventing another `_*` root. The number
@@ -2195,7 +2301,12 @@ Placeholders used in this document — and where the real value lives:
 
 ## 8. Quick reference
 
-**Exit codes** ✅ verified 2026-08-13
+Default simple route: direct start 0 means task actions/no pending human action, 3 means
+human action required, 1 means refusal; no fidelity/completion authority.
+Read `run.json`, private briefs, task-result JSON and `t2p status --json` for its native
+stages, human actions and limitations.
+
+**Advanced script exit codes** ✅ verified 2026-08-13
 
 `—` means that script cannot return that exit code.
 

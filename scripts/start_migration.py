@@ -1,13 +1,13 @@
 """
-purpose: start one supported Tableau site/project/workbook migration through references and bundle.
-usage:   python -B scripts/start_migration.py [--project NAME|LUID] [--workbook NAME|LUID]
-                                               [--env PATH] [--runs-parent PATH]
-                                               [--storage-decision PATH] [--session-id UUID]
-         python -B scripts/start_migration.py --assess-only [--env PATH] [--runs-parent PATH]
-                                               [--session-id UUID]
+purpose: prepare a scoped Tableau-to-builder run, with explicit advanced conversion compatibility.
+usage:   python -B scripts/start_migration.py --mode single --style one-to-one --numeric none
+             --workbook LUID --assessment skip [--env PATH] [--runs-parent PATH]
+         python -B scripts/start_migration.py --resume ABSOLUTE_RUN [--decision ID=CHOICE]
+         python -B scripts/start_migration.py --advanced [legacy arguments]
 
-This is a thin pre-bundle front door. Exit 0 means only that the supported scope has both a bundle
-and Tableau references; it does not establish fidelity, START_READY, COMPLETE or deployability.
+The default route returns human and task-tool actions without conversion or package prerequisites.
+Explicit --advanced and --assess-only retain their native engine/assessment authority.
+No route's wrapper exit establishes fidelity, START_READY, COMPLETE or deployability.
 """
 
 from __future__ import annotations
@@ -559,7 +559,16 @@ def _attribution(args: argparse.Namespace, environ: dict[str, str]) -> dict[str,
 
 
 def _front_door_command(args: argparse.Namespace, env_path: Path, short_root: Path) -> str:
-    command = [sys.executable, "-B", str(SCRIPT), "--env", str(env_path), "--runs-parent", str(short_root)]
+    command = [
+        sys.executable,
+        "-B",
+        str(SCRIPT),
+        "--advanced",
+        "--env",
+        str(env_path),
+        "--runs-parent",
+        str(short_root),
+    ]
     for flag, value in (
         ("--project", args.project),
         ("--workbook", args.workbook),
@@ -608,7 +617,7 @@ def _summary(  # pylint: disable=too-many-arguments,too-many-locals
         if overall == 0:
             print("1. Review the report and choose scope; this is not migration readiness.", flush=True)
             print(
-                "2. `t2p start --project <name>` creates a NEW run and repeats survey/assessment "
+                "2. `t2p start --advanced --project <name>` creates a NEW advanced run and repeats survey/assessment "
                 "until future bundle support.",
                 flush=True,
             )
@@ -661,7 +670,7 @@ def _summary(  # pylint: disable=too-many-arguments,too-many-locals
 
 # This entry point is intentionally the five-stage composition; stage contracts stay adjacent here.
 # pylint: disable=too-many-locals,too-many-return-statements,too-many-branches,too-many-statements
-def main(
+def advanced_main(
     argv: list[str] | None = None,
     *,
     observer: Callable[[dict], None] | None = None,
@@ -1125,6 +1134,23 @@ def _finalize(
         admin_insights_reason=admin_insights_reason,
     )
     return overall
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    observer: Callable[[dict], None] | None = None,
+    diagnostic_env: bool = False,
+) -> int:
+    """Default to source preparation; conversion remains explicitly advanced."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--advanced" in arguments or "--assess-only" in arguments:
+        if "--advanced" in arguments:
+            arguments.remove("--advanced")
+        return advanced_main(arguments, observer=observer, diagnostic_env=diagnostic_env)
+    import simple_migration  # pylint: disable=import-outside-toplevel
+
+    return simple_migration.main(arguments, observer=observer)
 
 
 if __name__ == "__main__":

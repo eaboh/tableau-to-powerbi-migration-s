@@ -37,6 +37,16 @@ ASSESS_ONLY_OWNERS = {
     "report": "assessment_report.py",
 }
 ALL_STAGE_OWNERS = STAGE_OWNERS | ASSESS_ONLY_OWNERS
+SIMPLE_STAGE_OWNERS = {
+    "selection": "prepare_tableau_source.py",
+    "sources": "prepare_tableau_source.py",
+    "assessment": "assess_estate.py",
+    "assessment_report": "assessment_report.py",
+    "reference": "capture_tableau_oracle.py",
+    "semantic": "pbi-semantic-builder",
+    "report": "pbi-report-builder",
+    "comparison": "pbi-migration-validator",
+}
 REFRESH_OWNER = Path(".github", "skills", "pbip-model-refresh", "scripts", "open_desktop.py")
 MODEL_CHECK_DISCLAIMER = (
     "Model-only automated checks: not START_READY, visual/numeric fidelity, validated data persistence/"
@@ -91,7 +101,7 @@ ENVELOPE_SCHEMA = {
                 "type": "object",
                 "required": ["stage", "owner", "native_exit_code", "state", "artifact"],
                 "properties": {
-                    "stage": {"enum": list(ALL_STAGE_OWNERS)},
+                    "stage": {"type": "string"},
                     "owner": {"type": "string"},
                     "native_exit_code": {"type": ["integer", "null"]},
                     "state": {"type": "string"},
@@ -173,7 +183,7 @@ def build_parser(prog: str = "python -B scripts/t2p.py") -> argparse.ArgumentPar
         prog=prog,
         allow_abbrev=False,
         description=(
-            "Narrow pilot: diagnostic doctor, assessment-only survey, live project start, read-only status, "
+            "Diagnostic doctor, advanced assessment-only survey, scoped source/builder start, read-only status, "
             "read-only unit lookup, local .pbip refresh, Desktop observation, dialog details and unit checks. "
             "Without a command, help prints to stderr and exits 2; use --help for stdout or --json for a "
             "structured syntax-error response."
@@ -193,7 +203,7 @@ def build_parser(prog: str = "python -B scripts/t2p.py") -> argparse.ArgumentPar
     commands = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
     for command, help_text in (
         ("doctor", "Read-only plain preflight and configuration presence; no login or run."),
-        ("start", "Attempt one exact live Tableau project; assessment remains site-wide."),
+        ("start", "Prepare selected workbooks and private builder actions; no default conversion."),
         ("assess", "Assess one Tableau site and write offline HTML; no harvest, capture, or conversion."),
         ("status", "Read-only inventory for one absolute run: units, path budget and the owner's next command."),
         ("units", "Read-only unit-ID lookup across one runs root; no allocation, rename or refresh."),
@@ -251,7 +261,9 @@ def build_parser(prog: str = "python -B scripts/t2p.py") -> argparse.ArgumentPar
         if command in {"doctor", "start", "assess"}:
             child.add_argument("--env", type=Path, help="selected environment file (default: toolkit .env)")
         if command == "start":
-            child.add_argument("--project", required=True, help="one nonempty exact project name or LUID")
+            child.add_argument("--project", help="one nonempty exact project name or LUID")
+            child.add_argument("--advanced", action="store_true", help="explicit legacy five-stage conversion route")
+            _add_simple_arguments(child)
             child.add_argument("--runs-parent", type=Path, help="explicit parent for _runs; no relocation")
             child.add_argument("--storage-decision", type=Path, help="existing engine-owned storage policy")
             child.add_argument("--session-id", help="existing Copilot session UUID attribution")
@@ -261,6 +273,25 @@ def build_parser(prog: str = "python -B scripts/t2p.py") -> argparse.ArgumentPar
             child.add_argument("--runs-parent", type=Path, help="explicit parent for _runs; no relocation")
             child.add_argument("--session-id", help="existing Copilot session UUID attribution")
     return parser
+
+
+def _add_simple_arguments(parser: argparse.ArgumentParser) -> None:
+    """Keep installed help self-contained; backend imports happen after toolkit binding."""
+    parser.add_argument("--mode", choices=("single", "batch"), help="explicit single or per-workbook batch")
+    parser.add_argument("--style", choices=("one-to-one", "modernize"), help="explicit fidelity/design intent")
+    parser.add_argument("--numeric", choices=("none", "required"), help="explicit numeric comparison scope")
+    parser.add_argument("--workbook", action="append", help="selected exact workbook LUID or scoped name")
+    parser.add_argument("--local", type=Path, action="append", help="local Tableau workbook, copied read-only")
+    parser.add_argument("--assessment", choices=("run", "skip"), help="single may skip; batch assesses scope")
+    parser.add_argument("--resume", type=Path, help="same absolute run, never a new allocation")
+    parser.add_argument("--pbip", action="append", help="explicit WORKBOOK_KEY=existing.pbip mapping")
+    parser.add_argument("--connection-example", type=Path, help="read-only PBIP with example M/TMDL connections")
+    parser.add_argument("--target", action="append", help="explicit WORKBOOK_KEY:connection_field=target")
+    parser.add_argument("--design", type=Path, help="human-approved modernization design")
+    parser.add_argument("--decision", action="append", help="FINDING_ID=retry|replace|skip|continue|accept")
+    parser.add_argument("--replacement", action="append", help="FINDING_ID=private replacement evidence path")
+    parser.add_argument("--record", action="append", help="UNIT_ID:semantic|report|comparison=private task result JSON")
+    parser.add_argument("--refresh-strategy", choices=("uia", "operator"), default=None)
 
 
 def _add_units_actions(parser: argparse.ArgumentParser) -> None:
@@ -908,11 +939,31 @@ def start(args: argparse.Namespace, result: dict) -> int:  # pylint: disable=too
 
     result["authority"] = "start_migration.py"
     assessing = args.command == "assess"
+    simple = not assessing and not args.advanced
     stage_names = (
         ("preflight", "survey", "assessment", "admin_insights", "report") if assessing else tuple(STAGE_OWNERS)
     )
-    result["stages"] = [_stage(name, None, "not_launched") for name in stage_names]
-    delegated = ["--assess-only"] if assessing else ["--project", args.project]
+    result["stages"] = [] if simple else [_stage(name, None, "not_launched") for name in stage_names]
+    delegated = ["--assess-only"] if assessing else [] if simple else ["--advanced"]
+    if not assessing and args.project is not None:
+        delegated.extend(["--project", args.project])
+    if simple:
+        for name in (
+            "mode",
+            "style",
+            "numeric",
+            "assessment",
+            "resume",
+            "connection_example",
+            "design",
+            "refresh_strategy",
+        ):
+            value = getattr(args, name)
+            if value is not None:
+                delegated.extend(["--" + name.replace("_", "-"), str(value)])
+        for name in ("workbook", "local", "pbip", "target", "decision", "replacement", "record"):
+            for value in getattr(args, name) or []:
+                delegated.extend(["--" + name, str(value)])
     for flag, value in (
         ("--env", args.env),
         ("--runs-parent", args.runs_parent),
@@ -988,9 +1039,27 @@ def start(args: argparse.Namespace, result: dict) -> int:  # pylint: disable=too
         elif event == "configuration":
             result["checks"] = record["checks"]
             result["limitations"].append(record["reason"])
+        elif event == "simple":
+            result["route"] = record["route"]
+            result["human_actions"] = record.get("actions", [])
+            result["limitations"].extend(record.get("limitations", []))
+            result["stages"] = [
+                {
+                    "stage": name,
+                    "owner": SIMPLE_STAGE_OWNERS[
+                        name.partition(":")[2]
+                        if name.partition(":")[2] in SIMPLE_STAGE_OWNERS
+                        else name.partition(":")[0]
+                    ],
+                    "native_exit_code": stage.get("native_exit_code"),
+                    "state": stage["state"],
+                    "artifact": stage.get("artifact"),
+                }
+                for name, stage in record.get("stages", {}).items()
+            ]
 
     _print_safe(_run_line(result, args))
-    if assessing:
+    if assessing or simple:
         result["path_report"] = None
     try:
         code = start_migration.main(delegated, observer=observe, diagnostic_env=True)
@@ -1004,7 +1073,11 @@ def start(args: argparse.Namespace, result: dict) -> int:  # pylint: disable=too
     )
     result["proof_boundary"]["established"] = ["delegated_wrapper_result"]
     result["limitations"].append(
-        "assessment_only_not_migration_readiness" if assessing else "capture_only_not_completion"
+        "assessment_only_not_migration_readiness"
+        if assessing
+        else "builder_actions_not_completion"
+        if simple
+        else "capture_only_not_completion"
     )
     return code
 
@@ -1113,6 +1186,10 @@ def status(args: argparse.Namespace, result: dict) -> int:
             }
         )
     result["limitations"] = ["last_observed_not_liveness", "customer_labels_local_only"]
+    if observed.get("route") == "simple/v1":
+        result["route"] = observed["route"]
+        result["human_actions"] = observed["human_actions"]
+        result["limitations"].extend(observed["limitations"])
     if observed.get("intent") == "assessment":
         result["limitations"].append("assessment_only_not_migration_readiness")
     result["proof_boundary"]["established"] = ["read_only_inventory"]
@@ -1611,8 +1688,34 @@ def main(argv: list[str] | None = None, *, installed: bool = False) -> int:
             parser.print_help(sys.stderr)
             return 2
         args = parser.parse_args(argv)
-        if args.command == "start" and not args.project.strip():
-            raise ArgumentError("nonempty_project_required")
+        if args.command == "start":
+            if args.project is not None and not args.project.strip():
+                raise ArgumentError("nonempty_project_required")
+            if args.advanced and args.project is None:
+                raise ArgumentError("advanced_project_required")
+            if args.advanced and any(
+                getattr(args, name) is not None
+                for name in (
+                    "mode",
+                    "style",
+                    "numeric",
+                    "assessment",
+                    "resume",
+                    "connection_example",
+                    "design",
+                    "refresh_strategy",
+                    "workbook",
+                    "local",
+                    "pbip",
+                    "target",
+                    "decision",
+                    "replacement",
+                    "record",
+                )
+            ):
+                raise ArgumentError("simple_arguments_conflict_with_advanced")
+            if not args.advanced and args.storage_decision is not None:
+                raise ArgumentError("storage_decision_is_advanced_only")
         if args.command == "desktop" and not _desktop_target_valid(args):
             raise ArgumentError("invalid_arguments_use_help")
         install_failure = installed and not _install_binding(result)

@@ -173,6 +173,9 @@ def test_every_documented_flag_is_actually_implemented() -> None:
             target_path = REPO_ROOT / shim_target.group(0)
             if target_path.is_file():
                 shim_text = target_path.read_text(encoding="utf-8")
+        if script.name == "start_migration.py":
+            assert "import simple_migration" in text, "the default front door must delegate to its parser owner"
+            shim_text += (REPO_ROOT / "scripts" / "simple_migration.py").read_text(encoding="utf-8")
 
         undocumented = _undocumented_flags(text, flags, shim_text)
         assert not undocumented, (

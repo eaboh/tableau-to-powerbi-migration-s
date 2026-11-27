@@ -81,7 +81,7 @@ def test_dependencies_read_the_documented_survey_key():
             "source": "sqlproxy/resolved",
         }
     ]
-    assert required == {"Sales"}
+    assert required == {"wb-sales"}
     assert assess_estate._parse_dependencies(None) == (set(), [])
 
 

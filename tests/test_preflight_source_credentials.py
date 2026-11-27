@@ -306,6 +306,35 @@ def test_the_classifier_hands_off_to_the_refresh_and_still_forbids_building(tmp_
     assert "may not build" in out and "proof required" in out
 
 
+def test_simple_route_allows_only_unvalidated_semantic_scaffolding(tmp_path: Path, caplog) -> None:
+    """Simple guidance permits offline staging without changing the live-source verdict."""
+    spec, _source = _live_spec(tmp_path)
+    before = spec.read_bytes()
+
+    assert pf.main(["--spec", str(spec), "--route", "simple"]) == 1
+
+    assert spec.read_bytes() == before
+    assert _files(tmp_path) == {"migration-spec.json"}
+    guidance = caplog.text
+    assert "UNPROVEN" in guidance
+    assert "unvalidated semantic scaffolding" in guidance
+    assert "human-operated first refresh" in guidance
+    assert "Never derive expected scope from the live model" in guidance
+    assert "Do not dispatch report authoring" in guidance
+    assert "credential, dialog, authorization and unsaved-state" in guidance
+    assert "may NOT build the semantic model" not in guidance
+
+
+@pytest.mark.parametrize("source_args", [["--bundle", "unused"], ["--model", "workspace", "model"]])
+def test_simple_route_guidance_requires_a_parser_spec(source_args: list[str], capsys) -> None:
+    """Bundle and service modes cannot opt into simple-route preparation guidance."""
+    with pytest.raises(SystemExit) as exc:
+        pf.main([*source_args, "--route", "simple"])
+
+    assert exc.value.code == 2
+    assert "--route simple requires --spec" in capsys.readouterr().err
+
+
 def test_a_failed_classification_never_fails_the_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The parser's post-parse classification is a read-only print; its failure no longer exits 3."""
     import parse_tableau  # pylint: disable=import-outside-toplevel

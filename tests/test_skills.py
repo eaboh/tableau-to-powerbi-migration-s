@@ -502,8 +502,9 @@ def test_live_source_skill_routes_through_the_shipped_model_and_a_human_stop() -
     """The live-source route after the credential gate was retired: instruction and tool behaviour only.
 
     With no file-system block left, these sentences are the whole control: check the emitted model,
-    refresh the shipped copy with canaries, stop for a human on any dialog, do it before builders,
-    and count only check_unit's data-evidence row as proof.
+    refresh the shipped copy with canaries, stop for a human on any dialog, load before builders,
+    and count only check_unit's data-evidence row as proof. Explicit staged preparation requires
+    a human refresh before report handoff, not before basic model creation.
     """
     text = LIVE_SOURCE_SKILL.read_text(encoding="utf-8")
     for needle, diagnostic in [
@@ -537,6 +538,33 @@ def test_live_source_skill_routes_through_the_shipped_model_and_a_human_stop() -
     assert "Offline, credential-free source checks" in static_row, "script index lost static source check"
     assert "M_PARAM_UNDEFINED" in static_row and "SOURCE_COLLAPSED" in static_row
     assert not _table_row(SCRIPTS_README, "probe_live_source.py"), "script index routes to retired live probe"
+
+
+def test_live_source_staged_fallback_requires_human_refresh_before_report_handoff() -> None:
+    text = LIVE_SOURCE_SKILL.read_text(encoding="utf-8")
+    staged = text.split("## Staged model fallback", 1)[1].split("## Run order", 1)[0]
+    for requirement in (
+        "Do not require a successful connection merely to prepare the model.",
+        "same run's decisions and private brief",
+        "`fallback_authorization: model_only_unvalidated` and model-only scope",
+        "Do not execute M, query a source, trigger Refresh, fabricate rows",
+        "**Stop as soon as basic connections and table definitions are in place.**",
+        "**Refresh** and **Save**",
+        "End the turn and wait.",
+        "Do not launch an operator-only refresh command",
+        "--verify-only --pid <pid> --canaries",
+        "persisted-cache/cold-reopen evidence",
+        "Human confirmation alone",
+        "**Resume only after those checks succeed.**",
+        "A subsequent source/connection change requires another human Refresh and Save",
+    ):
+        assert requirement in staged, f"staged model fallback lost requirement: {requirement}"
+    for agent, requirement in (
+        ("pbi-semantic-builder", "do not report the staged model as a completed semantic handoff"),
+        ("tableau-migrator", "Do not dispatch the report builder until the human has refreshed and saved"),
+    ):
+        text = (REPO_ROOT / ".github" / "agents" / f"{agent}.agent.md").read_text(encoding="utf-8")
+        assert requirement in text, f"{agent} lost staged human-refresh handoff"
 
 
 def test_host_refresh_contract_is_uia_default_with_operator_handoff() -> None:

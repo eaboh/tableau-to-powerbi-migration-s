@@ -22,6 +22,8 @@ import re
 import sys
 from pathlib import Path
 
+from check_datamodel import _tokenize, iter_m_blocks_text
+
 _M_PARAM_REF = re.compile(r'#"([^"]+)"')
 # Connector functions whose FIRST argument is the upstream host. Used by `check_source_coverage` to
 # resolve which endpoints a model can actually reach. Deliberately a fixed list: an unrecognised
@@ -49,7 +51,7 @@ def find_model_dir(bundle: Path) -> Path:
 
 
 def check_m_parameters(model_dir: Path) -> dict[str, list[str]]:
-    """Compare `#"Name"` references across partitions against `expression Name` definitions.
+    """Compare quoted M references against definitions, excluding DAX, comments and literals.
 
     This is the `M_PARAM_UNDEFINED` defect class.
 
@@ -62,13 +64,23 @@ def check_m_parameters(model_dir: Path) -> dict[str, list[str]]:
     """
     defined: dict[str, str] = {}
     referenced: set[str] = set()
+    scan_errors: list[str] = []
     for tmdl in model_dir.rglob("*.tmdl"):
         text = tmdl.read_text(encoding="utf-8", errors="replace")
         for match in _M_PARAM_DEF.finditer(text):
             name = match.group(1) or match.group(2)
             value = _M_PARAM_META.sub("", match.group("value")).strip()
             defined[name] = value
-        referenced.update(_M_PARAM_REF.findall(text))
+        for block, first_line, _ in iter_m_blocks_text(text):
+            tokens, errors = _tokenize(block)
+            referenced.update(
+                token.text[2:-1].replace('""', '"')
+                for token in tokens
+                if token.kind == "string" and token.text.startswith('#"')
+            )
+            scan_errors.extend(
+                f"{tmdl.relative_to(model_dir)}:{first_line + line - 1}: {message}" for message, line, _ in errors
+            )
 
     empty = sorted(n for n in referenced if n in defined and defined[n] in ("", '""', "''"))
     return {
@@ -76,6 +88,7 @@ def check_m_parameters(model_dir: Path) -> dict[str, list[str]]:
         "referenced": sorted(referenced),
         "undefined": sorted(referenced - set(defined)),
         "empty": empty,
+        "scan_errors": scan_errors,
     }
 
 
@@ -217,6 +230,11 @@ def run_check_only(bundle: Path, spec: Path | None) -> int:
     params = check_m_parameters(model_dir)
     print(f"M parameters defined   : {', '.join(params['defined']) or '(none)'}")
     print(f"M parameters referenced: {', '.join(params['referenced']) or '(none)'}")
+    if params["scan_errors"]:
+        for error in params["scan_errors"]:
+            print(f"M_SCAN_ERROR: {error}")
+        print("M parameter references could not be fully scanned; resolve the syntax finding first.")
+        return 1
     if params["undefined"]:
         print(f"M_PARAM_UNDEFINED: {', '.join(params['undefined'])}")
         print("The model references M parameters that are never defined; it cannot refresh.")
