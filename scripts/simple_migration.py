@@ -317,8 +317,13 @@ def _apply_inputs(args: argparse.Namespace, state: dict) -> None:
             raise ValueError("target_requires_workbook_key_and_supported_connection_field")
     if args.connection_example:
         example = str(args.connection_example.expanduser().absolute())
-        if state.get("connection_example") not in {None, example}:
+        previous = state.get("connection_example")
+        if previous not in {None, example} and (
+            "connection_inspection" in state or any("working" in row for row in state["units"])
+        ):
             raise ValueError("connection_example_change_refused")
+        if previous not in {None, example} and previous not in state.get("connection_example_history", []):
+            state.setdefault("connection_example_history", []).append(previous)
         state["connection_example"] = example
     for identifier, choice in _pairs(args.decision).items():
         if choice not in CHOICES:

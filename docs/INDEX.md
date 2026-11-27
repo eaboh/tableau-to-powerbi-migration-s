@@ -29,6 +29,10 @@ Map of maps for agent-facing knowledge. Start here, then open the matching index
    unverified data/fidelity and obtain separate approval before deployment.
 4. Load the applicable skill for live-source proof, refresh/persistence, Desktop
    observation or AI metadata. Offline Linux checks are not live PAT/Desktop acceptance.
+   For unproven live sources, offer the
+   [staged model fallback](../.github/skills/live-source-reachability/SKILL.md#staged-model-fallback--human-refresh-required):
+   prepare basic connections/tables offline, stop for human Refresh and Save, then verify the same
+   model's canaries and persistence before report authoring.
 
 ## Explicit advanced package route
 
@@ -41,7 +45,7 @@ unchanged; do not apply them to a simple-route advisory handoff.
 1. `python scripts/check_reference_readiness.py <package> [...]` — **after deterministic emission, `package_unit.py` packaging and applicable binding, before agentic dispatch**. The final Phase-1 package-only verdict is **`START_READY / 0`** only when boundary, current S1/S2, issued v2 brief, source, canonical data access, reference policy and fresh binding inspection all pass. Bind separately with `set_data_folder.py --package <absolute-package>`; supply a shared provider and consumer in **ONE final check**, never a consumer alone. Established findings exit 1; `CANNOT_ESTABLISH` exits 3; neither permits dispatch. Ordinary `<bundle>` targets retain reference-only `READY`/engine-earned `NOT_APPLICABLE`, never package START_READY. Reference grades and `limitations_encountered` remain unchanged; BOUND stays UNVALIDATED. See [final START_READY](reference-readiness.md#final-package-start_ready-562-622) and the authoritative [conversion, dispatch, and fidelity boundaries](reference-readiness.md#conversion-dispatch-and-fidelity-boundaries).
 2. `python scripts/check_unit.py <unit-or-bundle> --scope <model|report|integration|all>` — diagnostics. **Sole COMPLETE authority:** `python scripts/check_unit.py <package> --scope all --receipt-sha256 <H>`, with exact caller-supplied lowercase 64-hex H, no prefix or token discovery. Tokenless all-scope stays non-success; layers never COMPLETE. Current v2 numeric `none` waives comparison only; required/unknown remains `CANNOT_ESTABLISH(NUMERIC)`. [Evidence, exact disclosures and current-snapshot limits](../scripts/README.md#phase-2-complete--one-caller-pinned-current-snapshot-check); direct gates isolate findings.
 3. `python scripts/read_handover.py <bundle> --workbook <name>` — residual work queue and engine-block reason.
-4. Live database sources: run the `live-source-reachability` skill **before builders start**. It delegates to `pbip-model-refresh`'s existing automatic-source procedure on the shipped working copy with named canaries; any sign-in or other dialog is a human stop. START_READY can admit `live_unproven`; a live unit reaches COMPLETE only with `check_unit`'s same-run PASS `data-evidence` row and independent fidelity sign-off.
+4. Live database sources: load the `live-source-reachability` skill **before builders start**. Normally it delegates proof to `pbip-model-refresh`'s existing automatic-source procedure on the shipped working copy with named canaries. Its explicitly selected model-only staged fallback allows basic offline preparation first, then requires human Refresh and Save and verification; it does not waive package entry or scope. Any sign-in or other dialog is a human stop. START_READY can admit `live_unproven`; a live unit reaches COMPLETE only with `check_unit`'s same-run PASS `data-evidence` row and independent fidelity sign-off.
 5. Load the right skill before acting: `live-source-reachability` for live-source proof and
    credential stops, `pbip-model-refresh` for cache/refresh, and
    `powerbi-ai-readiness` for Copilot/Q&A metadata.

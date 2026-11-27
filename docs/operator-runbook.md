@@ -762,6 +762,17 @@ specify the fallback in the brief (`fallback_authorization: model_only_unvalidat
 scope, artifacts unvalidated),
 never pretend a source was reachable or infer authorization.
 
+For live sources, offer the
+[staged model fallback](../.github/skills/live-source-reachability/SKILL.md#staged-model-fallback--human-refresh-required):
+build basic connections and table definitions offline, then **stop for human Refresh and Save**
+of the exact working PBIP. Do not require connectivity before that preparation or automatically
+execute its sources. In simple runs, persist the explicit choice in decisions and the brief;
+advanced runs retain the model-only fallback/scope above and existing package gates.
+Hand over source identities, queries to review, named canaries and static findings. Wait for
+the human, then verify the same model's canaries and persisted-cache/cold-reopen evidence through
+`pbip-model-refresh` before report authoring can resume within the commissioned scope. Human
+confirmation alone is not a passed refresh, fidelity sign-off or COMPLETE.
+
 > ⚠️ **Check the brief is actually ignored before you write anything into it:**
 > `git check-ignore -v -- <actual-private-brief-path>` (without a trailing slash). Repo-local runs
 > are covered by `/_*`; a short-root run outside the checkout cannot be committed by it, but is still
@@ -1621,8 +1632,9 @@ not re-ask.
 
 1. Published datasources → fetch the `.tds` and migrate it first, or proceed knowingly incomplete.
 2. Unproven live sources → follow [live-source-reachability](../.github/skills/live-source-reachability/SKILL.md);
-   distinguish structural findings from human credential/dialog stops, or use the brief's model-only
-   unvalidated fallback.
+   distinguish structural findings from human credential/dialog stops, or select its staged model
+   fallback: basic offline connections/tables, then a required human Refresh and Save before
+   verified handoff. Advanced work retains the brief's model-only unvalidated fallback and scope.
 3. Extract-only sources → materialize real rows, or model-only.
 4. The high-severity `limitations_encountered` digest → proceed, or narrow scope.
 

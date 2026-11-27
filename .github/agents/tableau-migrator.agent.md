@@ -47,6 +47,13 @@ all safeguards. Route findings by layer; humans can accept discrepancies or skip
 but cannot change failures/absences into validation. No automatic repair loop, promotion or deployment.
 Missing task dispatch means authorized manual handoff, never inline replacement.
 
+For an explicitly selected live-source staged model fallback, dispatch only the semantic builder
+to prepare basic connections and table definitions without source execution. Once prepared, relay
+the exact working PBIP and Refresh/Save handoff to the human, persist the pending finding and end
+the turn. Do not dispatch the report builder until the human has refreshed and saved, and the
+live-source skill's same-model canary and persistence checks succeed. Do not accept the pending
+semantic finding or missing cache merely to advance this selected fallback.
+
 For runs without the simple discriminator, require explicit advanced commissioning and use the contract
 below unchanged. Do not make engine artifacts optional in legacy authority readers.
 
@@ -78,7 +85,7 @@ Give each delegate the run, unit, source, working path, brief, handover and refe
 
 - Task tool only, to dispatch S, R and V. If it is unavailable, report BLOCKED; do not work inline.
 - `scripts\check_reference_readiness.py` is the initial entry gate: check once, before the first triage or builder dispatch, that the current package cohort is START_READY with process exit 0. Resumed Phase-2 work on an edited package does not rerun it; never rehash or repackage to make it pass.
-- `live-source-reachability` skill: run it before dispatching builders, through the shipped Power BI artifact.
+- `live-source-reachability` skill: load before dispatching builders. Normally prove the shipped Power BI artifact first; its explicit model-only staged fallback permits basic offline semantic preparation, then requires human Refresh and Save and verification before any report handoff. Existing package entry and scope requirements remain.
 - `pbip-model-refresh` skill: owns refresh, persist and warm-cache custody.
 - `t2p check <package>` (read-only layered diagnostics, never COMPLETE), `scripts\check_migration_progress.py --handoff`, `scripts\check_unit.py`, `scripts\promote_unit.py`.
 

@@ -48,6 +48,17 @@ recalculation and Save use `pbip-model-refresh`; live-source execution uses `liv
 All credential/dialog, authorization, unsaved-state, tool-refusal and PID-custody safeguards remain.
 Never fabricate rows, connection attribution or a passed refresh.
 
+When the human selects the live-source skill's **staged model fallback**, missing connectivity is
+not an entry blocker for offline preparation. Build only the basic connections, literal parameters,
+table/column definitions and source-navigation M supported by the spec and mapped targets. Do not
+execute sources or trigger refresh. As soon as these are in place, return a
+**HUMAN REFRESH REQUIRED** finding with the exact working PBIP, source identities, named canaries
+and static findings. Ask the human to review the queries, Refresh and Save in Desktop, then stop
+and wait. After human confirmation, verify the same model using the refresh skill's read-only
+checks and persisted-cache/cold-reopen evidence before continuing or handing off to report authoring.
+A human confirmation alone is not a passed refresh. Preserve this pending finding in the task
+result; do not report the staged model as a completed semantic handoff.
+
 Return a private run-owned task result JSON: `state: authored|findings|failed`, native exit (or null
 when no process exit exists), native evidence, limitations and mandatory safety stops. Emitted artifact
 paths are run-relative under `artifacts.semantic_model` / `artifacts.project_file`. The dispatcher
@@ -90,7 +101,7 @@ Reuse the tools below before building your own. Your own code is the last resort
 ## Output and handoff
 
 - The initial model check is diagnostic: repair the owned findings. At handoff `check_datamodel.py` exits 0 (after bundle edits, `check_migration_progress.py --tamper` too; `PACKAGE_DRIFT` alone is package state, not bundle drift), and each remaining finding is an unresolved blocker with its owner.
-- After edits, reopen, refresh, save through the host skill. Require `REFRESH: DATA_OK + PERSISTED`, real rows for every commissioned table, a warm `cache.abf`, and every non-trivial measure compared at real grain with `EVALUATE` against the Tableau value.
+- After edits, reopen, refresh, save through the host skill. For the explicitly selected staged model fallback, first return the basic model for human Refresh and Save as defined by `live-source-reachability`; do not automatically refresh it or hand it to report authoring while pending. A final advanced handoff still requires `REFRESH: DATA_OK + PERSISTED`, real rows for every commissioned table, a warm `cache.abf`, and every non-trivial measure compared at real grain with `EVALUATE` against the Tableau value; manual confirmation alone supplies none of those verdicts.
 - Seal AI last: `python scripts\set_ai_instructions.py --check --strict --model <model> --md <md>` exit 0 with `qnaEnabled: true`. Never `--adopt-existing`; never author synonyms.
 - Record build-stage limitations in `limitations_encountered` with `stage: "semantic_build"`.
 - Return identities, authored-vs-engine changes, object fates, declarations, gate exits, and row, cache and AI evidence. Missing or stale evidence: `CANNOT_ESTABLISH` or BLOCKED. Hand the warm cache to `pbi-report-builder` through the orchestrator. No self-issued AI-ready, fidelity or COMPLETE.

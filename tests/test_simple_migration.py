@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import simple_migration as simple  # noqa: E402
+from simple_pbip import PBIPRefusal  # noqa: E402
 
 
 @pytest.fixture
@@ -565,6 +566,78 @@ def test_unapplied_mapping_can_be_corrected_without_retargeting_another_units_wo
     with pytest.raises(ValueError, match="existing_authored_mapping_change_refused"):
         simple._apply_inputs(args, state)
     assert state["pbips"]["first"] == "/first.pbip"
+
+
+def test_failed_connection_example_can_be_replaced_before_handoff(local_run, capsys, monkeypatch):
+    source, parent, calls = local_run
+    examples = [parent / f"sample-{index}.pbip" for index in range(3)]
+    inspections = []
+
+    def inspect(path):
+        inspections.append(path)
+        if path != examples[-1]:
+            raise PBIPRefusal("Referenced report/model directory is missing")
+        return {"project_file": str(path), "connections": [{"connector": "Sql.Database"}]}
+
+    monkeypatch.setitem(sys.modules, "simple_pbip", SimpleNamespace(inspect_connections=inspect))
+    simple.main(_start(source, parent, "--connection-example", str(examples[0])))
+    root = Path(_result(capsys)["run"])
+    resume = ["--resume", str(root), "--decision", "reference:u0001=continue"]
+    assert simple.main(resume) == 1
+    assert _result(capsys)["actions"][0]["reason"] == "operation_refused:PBIPRefusal"
+    state = json.loads((root / "run.json").read_text())
+    assert "connection_inspection" not in state
+    assert all("working" not in unit for unit in state["units"])
+    assert simple.main([*resume, "--connection-example", str(examples[1])]) == 1
+    assert _result(capsys)["actions"][0]["reason"] == "operation_refused:PBIPRefusal"
+    assert simple.main([*resume, "--connection-example", str(examples[2])]) == 0
+    result = _result(capsys)
+    assert result["actions"][0]["owner"] == "pbi-semantic-builder"
+    state = json.loads((root / "run.json").read_text())
+    assert state["connection_example"] == str(examples[-1])
+    assert state["connection_example_history"] == [str(path) for path in examples[:-1]]
+    assert state["connection_inspection"]["project_file"] == str(examples[-1])
+    brief = Path(result["actions"][0]["brief"]).read_text(encoding="utf-8")
+    assert f'"example": {json.dumps(str(examples[-1]))}' in brief
+    assert inspections == examples
+    assert len(calls) == 1
+    assert simple.main([*resume, "--connection-example", str(examples[-1])]) == 0
+    _result(capsys)
+    assert (
+        json.loads((root / "run.json").read_text())["connection_example_history"] == state["connection_example_history"]
+    )
+    assert inspections == examples
+
+
+@pytest.mark.parametrize("used_by", ["inspection", "working"])
+def test_used_connection_example_replacement_preserves_persisted_inputs(local_run, capsys, used_by):
+    source, parent, _calls = local_run
+    original = parent / "original.pbip"
+    simple.main(_start(source, parent, "--connection-example", str(original)))
+    root = Path(_result(capsys)["run"])
+    manifest = root / "run.json"
+    state = json.loads(manifest.read_text())
+    if used_by == "inspection":
+        state["connection_inspection"] = None
+    else:
+        state["units"][0]["working"] = {"root": str(root / "deliverables" / "u0001")}
+    manifest.write_text(json.dumps(state), encoding="utf-8")
+    before = manifest.read_bytes()
+    assert (
+        simple.main(
+            [
+                "--resume",
+                str(root),
+                "--connection-example",
+                str(parent / "replacement.pbip"),
+                "--pbip",
+                f"local-example={parent / 'another.pbip'}",
+            ]
+        )
+        == 1
+    )
+    assert _result(capsys)["actions"][0]["mandatory"]
+    assert manifest.read_bytes() == before
 
 
 def test_explicitly_skipped_unknown_mapping_resumes_same_run_and_preserves_decision(local_run, capsys):

@@ -18,6 +18,7 @@ purpose: preflight the DATA-SOURCE CREDENTIAL gate for a Tableau -> Power BI mig
          migration must verify connectivity and prompt the user if it is missing.
 
 usage:   python scripts/preflight_source_credentials.py --spec migrations/<slug>/migration-spec.json
+         python scripts/preflight_source_credentials.py --spec <spec> --route simple
          python scripts/preflight_source_credentials.py --bundle <engine-output-dir>
          python scripts/preflight_source_credentials.py --model "<Workspace>" "<SemanticModel>"
 
@@ -313,7 +314,7 @@ def _classify_legs(src: dict, index: int) -> list[tuple[str, str, str, str]]:
     return classified
 
 
-def cmd_classify(bundle_path: Path) -> int:
+def cmd_classify(bundle_path: Path, *, simple: bool = False) -> int:
     """Classify every data source in a parser spec or engine bundle for credential needs."""
     bundle = load_bundle(bundle_path)
     sources = bundle.data_sources
@@ -348,8 +349,11 @@ def cmd_classify(bundle_path: Path) -> int:
         # invites exactly that reading ("the human fixes it later, I continue now"). The imperative
         # lives here, in tool output, which agents follow far more literally than their own
         # instructions. This classification is read-only: it writes nothing to the migration.
-        _print_stop_directive(needs)
-        _print_remediation()
+        if simple:
+            _print_simple_guidance(needs)
+        else:
+            _print_stop_directive(needs)
+            _print_remediation()
     else:
         log.info("No live sources: all extract/flat (CSV + DataFolder).")
     if review:
@@ -426,6 +430,29 @@ def _empty_body() -> str:
     path = Path(tempfile.gettempdir()) / "preflight_empty.json"
     path.write_text("{}", encoding="ascii")
     return str(path)
+
+
+def _print_simple_guidance(needs: int) -> None:
+    """Keep offline preparation distinct from live-source proof on the simple route."""
+    log.warning(
+        "\nPROOF REQUIRED - %d live source(s) UNPROVEN (simple/v1).\n"
+        "This read-only classification opened no connection and does not diagnose credentials.\n"
+        "Follow live-source-reachability's staged model fallback only after the human's choice\n"
+        "is recorded in the same run's decisions and private brief. The semantic owner may prepare\n"
+        "unvalidated semantic scaffolding: basic connections, literal parameters, table/column\n"
+        "definitions and source-navigation M from the supplied spec and explicitly mapped targets.\n"
+        "Do not execute M, query sources, trigger Refresh, fabricate rows or invent schema.\n"
+        "Stop at the basic model and hand over its exact PBIP and named live-source canaries for a\n"
+        "human-operated first refresh: review all current M (including custom SQL), Refresh and Save.\n"
+        "Do not dispatch report authoring until same-model canary and persistence checks succeed.\n"
+        "Human confirmation alone is not data proof or DATA_OK + PERSISTED.\n"
+        "Automatic refresh still requires --automatic-source-scope and independent trusted engine\n"
+        "emission evidence. Never derive expected scope from the live model or omit the flag.\n"
+        "Without trusted emission evidence, retain the human handoff; do not run an operator-only\n"
+        "refresh on the human's behalf. All credential, dialog, authorization and unsaved-state\n"
+        "safeguards remain mandatory. Classification remains nonzero; live proof is separate.",
+        needs,
+    )
 
 
 def _print_stop_directive(needs: int) -> None:
@@ -530,10 +557,18 @@ def main(argv: list[str] | None = None) -> int:
         metavar=("WORKSPACE", "SEMANTIC_MODEL"),
         help="Workspace + semantic-model display names to check service datasource/refresh state (needs fab auth)",
     )
+    parser.add_argument(
+        "--route",
+        choices=("advanced", "simple"),
+        default="advanced",
+        help="Guidance only: simple permits explicitly selected offline staged-model preparation with --spec",
+    )
     args = parser.parse_args(argv)
+    if args.route == "simple" and args.spec is None:
+        parser.error("--route simple requires --spec")
 
     if args.spec or args.bundle:
-        return cmd_classify((args.spec or args.bundle).resolve())
+        return cmd_classify((args.spec or args.bundle).resolve(), simple=args.route == "simple")
     return cmd_gate(args.model[0], args.model[1])
 
 
